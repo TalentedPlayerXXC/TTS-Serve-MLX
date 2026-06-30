@@ -1,0 +1,19 @@
+# ============================================================
+# TTS-Serve-MLX 项目依赖
+# ============================================================
+# 安装: pip install -r requirements.txt
+# WebUI: pip install -r requirements.txt -r requirements-webui.txt
+# 构建: pip install -r requirements.txt -r requirements-dev.txt
+# ============================================================
+
+# ---- 核心 TTS / STT (MLX Apple Silicon) ----
+# 自动拉取: mlx, mlx-lm, transformers, huggingface_hub, scipy, tqdm
+mlx-audio==0.4.4
+
+# ---- Web API 服务 ----
+fastapi==0.136.1
+uvicorn[standard]==0.46.0
+
+# ---- 音频处理 ----
+soundfile==0.13.1
+numpy==2.4.4

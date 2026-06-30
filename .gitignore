@@ -1,0 +1,41 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Virtual environment
+.venv/
+
+# Build artifacts
+build/
+dist/
+
+# Output directories
+api_output/
+test_output/
+clone_output/
+
+# Generated audio files
+output*.wav
+
+# Reference audio samples
+# *.wav
+
+# Model data (keep only directory structure)
+models/qwenTTS_0.6B_MLX/*
+!models/qwenTTS_0.6B_MLX/.gitkeep
+!models/qwenTTS_0.6B_MLX/speech_tokenizer/
+models/qwenTTS_0.6B_MLX/speech_tokenizer/*
+!models/qwenTTS_0.6B_MLX/speech_tokenizer/.gitkeep
+models/qwenTTS_0.6B_Custom_MLX/*
+!models/qwenTTS_0.6B_Custom_MLX/.gitkeep
+!models/qwenTTS_0.6B_Custom_MLX/speech_tokenizer/
+models/qwenTTS_0.6B_Custom_MLX/speech_tokenizer/*
+!models/qwenTTS_0.6B_Custom_MLX/speech_tokenizer/.gitkeep
+models/whisper_asr_MLX/*
+!models/whisper_asr_MLX/.gitkeep
+models/voxCPM2_4bit_MLX/*
+!models/voxCPM2_4bit_MLX/.gitkeep
