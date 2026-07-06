@@ -388,5 +388,30 @@ env: { TTS_SERVE_PORT: '0' } // 0 = 随机端口
 ### 多实例支持
 如果需要多个 TTS 实例，每次使用不同端口。
 
+### 缓存管理
+Python 服务会积累生成的音频文件在 `api_output/` 目录中。可以通过 API 管理缓存：
+
+```typescript
+/** 查看缓存状态 */
+async function getCacheStatus() {
+  const res = await fetch(`http://${SERVER_HOST}:${SERVER_PORT}/cache`);
+  return res.json();
+  // { total_files: 42, total_mb: 50, oldest_age_hours: 72.5, ... }
+}
+
+/** 清理缓存（三种模式） */
+async function cleanupCache(mode: 'all' | 'older_than' | 'by_size', value?: number) {
+  const body: any = { mode };
+  if (mode === 'older_than') body.expire_hours = value ?? 24;
+  if (mode === 'by_size') body.max_size_mb = value ?? 500;
+  const res = await fetch(`http://${SERVER_HOST}:${SERVER_PORT}/cleanup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+```
+
 ### Python 日志
 Python 服务通过 stdout/stderr 输出日志，可在 Electron 的 Console 中查看。

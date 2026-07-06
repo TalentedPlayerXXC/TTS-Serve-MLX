@@ -105,14 +105,62 @@ python3 -m PyInstaller \
 
 echo ""
 
-# ---- 创建空 models/ 目录结构 ----
-echo "创建模型目录结构 (空壳)..."
+# ---- 创建空 models/ 目录结构 + 说明文件 ----
+echo "创建模型目录结构 (空壳 + 说明)..."
 for subdir in qwenTTS_0.6B_MLX whisper_asr_MLX voxCPM2_4bit_MLX; do
     mkdir -p "$MODELS_OUT/$subdir"
-    echo "将此目录下的模型文件 (.safetensors, .json 等) 复制到此处" > "$MODELS_OUT/$subdir/README.txt"
 done
-echo "[✓] models/ 目录已创建:"
-find "$MODELS_OUT" -type d | sed "s|$DIST_DIR/|    |"
+
+cat > "$MODELS_OUT/qwenTTS_0.6B_MLX/README.txt" << 'README'
+模型: Qwen3-TTS 0.6B (4-bit)
+来源: mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit
+用途: 语音克隆、批量配音、对话生成（Speaker 模式，无需 ASR）
+
+文件清单:
+  - model.safetensors (主模型 ~977MB)
+  - speech_tokenizer/model.safetensors (语音编解码器 ~651MB)
+  - config.json, tokenizer_config.json, vocab.json 等
+
+下载:
+  HF:          huggingface-cli download mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit --local-dir ./models/qwenTTS_0.6B_MLX
+  魔搭(无需代理): git clone https://www.modelscope.cn/aufklarer/Qwen3-TTS-12Hz-0.6B-Base-MLX-4bit.git ./models/qwenTTS_0.6B_MLX
+README
+
+cat > "$MODELS_OUT/whisper_asr_MLX/README.txt" << 'README'
+模型: Whisper Large v3 Turbo ASR (fp16)
+来源: mlx-community/whisper-large-v3-turbo-asr-fp16
+用途: 语音转文本（独立加载，不与 TTS 绑定）
+
+文件清单:
+  - model.safetensors (主模型 ~1.5GB)
+  - config.json, tokenizer.json, vocab.json 等
+
+下载:
+  HF:          huggingface-cli download mlx-community/whisper-large-v3-turbo-asr-fp16 --local-dir ./models/whisper_asr_MLX
+  魔搭(无需代理): git clone https://www.modelscope.cn/NexaAIDev/whisper-large-v3-turbo-MLX.git ./models/whisper_asr_MLX
+README
+
+cat > "$MODELS_OUT/voxCPM2_4bit_MLX/README.txt" << 'README'
+模型: VoxCPM2 2B (4-bit)
+来源: mlx-community/VoxCPM2-4bit
+用途: 情感克隆（steps=6, cfg=4.0）、声音设计
+特点: 48kHz 输出，原生 instruct 支持
+
+文件清单:
+  - model.safetensors (主模型 ~2.1GB)
+  - config.json, tokenizer.json 等
+
+下载:
+  HF:          huggingface-cli download mlx-community/VoxCPM2-4bit --local-dir ./models/voxCPM2_4bit_MLX
+  魔搭(无需代理): git clone https://www.modelscope.cn/aufklarer/VoxCPM2-MLX-int4.git ./models/voxCPM2_4bit_MLX
+README
+
+echo ""
+echo "models/ 目录已创建:"
+find "$MODELS_OUT" -name "README.txt" | while read f; do
+    dir=$(dirname "$f" | sed "s|$DIST_DIR/||")
+    echo "    $dir/README.txt"
+done
 
 echo ""
 echo "========================================"

@@ -1,12 +1,22 @@
 # TTS-Serve API 文档
 
-基于 FastAPI 的多功能语音服务，提供语音克隆、批量配音、语音转文本（STT）功能。
+基于 FastAPI 的多功能语音服务，提供语音克隆、批量配音、语音转文本（STT）、情感克隆、声音设计功能。
 
 - **基础 URL**: `http://localhost:8000`
 - **API 文档**: `http://localhost:8000/docs` (Swagger UI)
 - **音频输出格式**: WAV
 - **采样率**: Qwen3 TTS: 24000 Hz, VoxCPM2: 48000 Hz
 - **输出目录**: `./api_output/`（通过 `/output/` 静态挂载访问）
+
+---
+
+## 模型架构
+
+| 模型 | 功能 | 默认参数 |
+|------|------|---------|
+| **Qwen3-TTS**（Speaker 模式） | 语音克隆、批量配音、对话生成 | 无 ASR，Speaker Embedding |
+| **VoxCPM2** | 情感克隆、声音设计 | steps=6, cfg=4.0 |
+| **Whisper STT**（独立） | 语音转文本 | 独立加载，不与 TTS 绑定 |
 
 ---
 
@@ -27,6 +37,9 @@
 
 模型默认**不预加载**，需先调用 `/model/load` 加载后再使用其他接口。
 
+> **注意**：Qwen3-TTS 默认使用 Speaker Embedding 模式（无需 ASR）。
+> STT 模型**独立加载**，不与 TTS 绑定。需要语音转文本时单独 `POST /model/load {"model": "stt"}`。
+
 ### 1.1 健康检查
 
 ```
@@ -38,7 +51,7 @@ GET /health
 {
   "status": "ok",
   "qwen3_loaded": false,
-  "whisper_loaded": false,
+  "stt_loaded": false,
   "voxcpm2_loaded": false
 }
 ```
@@ -54,10 +67,9 @@ GET /model-info
 {
   "qwen3": {
     "path": "./models/qwenTTS_0.6B_MLX",
-    "loaded": false,
-    "has_asr_injected": false
+    "loaded": false
   },
-  "whisper": {
+  "stt": {
     "path": "./models/whisper_asr_MLX",
     "loaded": false
   },
@@ -78,7 +90,7 @@ GET /model/status
 ```json
 {
   "qwen3": false,
-  "whisper": false,
+  "stt": false,
   "voxcpm2": false
 }
 ```
@@ -98,7 +110,7 @@ POST /model/load
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `model` | string | 是 | 模型名称，可选 `"tts"`（加载 Qwen3 TTS + Whisper ASR）或 `"voxcpm2"` |
+| `model` | string | 是 | 模型名称，可选 `"tts"`（Qwen3 TTS, Speaker 模式）、`"voxcpm2"`（情感克隆/设计）、`"stt"`（Whisper 语音转文本） |
 
 **Response:**
 ```json
@@ -115,14 +127,20 @@ POST /model/load
 POST /model/unload
 ```
 
-**Request Body:**
+不传参数 = **全部卸载**。传参则只卸载指定模型。
+
+**Request Body（可选）:**
 ```json
 {
   "model": "tts"
 }
 ```
 
-**Response:**
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `model` | string | 否 | 不传=全部卸载，可选 `"tts"`、`"voxcpm2"`、`"stt"` |
+
+**Response (200):**
 ```json
 {
   "success": true,
@@ -131,11 +149,17 @@ POST /model/unload
 }
 ```
 
+> 不传参数时返回 `"model": "all"`。
+```
+
 ---
 
 ## 2. 语音克隆
 
 使用参考音频克隆音色生成语音。
+
+> **默认 Speaker Embedding 模式**：不传 `ref_text` 时，Qwen3-TTS 自动使用内置 speaker_encoder 提取音色。
+> 传 `ref_text` 时使用 ICL 模式（情感还原更精确，但需要预留文本）。
 
 ### 2.1 单条语音克隆
 
@@ -148,7 +172,7 @@ POST /clone
 {
   "text": "欢迎使用语音克隆系统",
   "ref_audio": "./audio/reference.wav",
-  "ref_text": "这是参考音频的文本",
+  "ref_text": null,
   "stream": false,
   "save_file": true,
   "filename": "my_clone"
@@ -159,7 +183,7 @@ POST /clone
 |------|------|------|--------|------|
 | `text` | string | 是 | - | 目标文本，1-5000 字符 |
 | `ref_audio` | string | 是 | - | 参考音频文件路径 |
-| `ref_text` | string | 否 | null | 参考音频的原文，若不提供则自动用 Whisper STT 识别 |
+| `ref_text` | string | 否 | null | 参考音频的原文。不传=Speaker Embedding 模式，传了=ICL 模式 |
 | `stream` | bool | 否 | false | 是否使用流式生成 |
 | `save_file` | bool | 否 | true | 是否保存为文件。`false` 时直接返回 WAV 二进制流 |
 | `filename` | string | 否 | null | 自定义文件名（不含扩展名） |
@@ -293,6 +317,8 @@ POST /dialogue
 
 使用 Whisper 模型将音频转换为文字。
 
+> STT 模型需单独加载：`POST /model/load {"model": "stt"}`，不与 TTS 绑定。
+
 ```
 POST /stt
 ```
@@ -347,8 +373,8 @@ POST /vox/clone
 | `ref_audio` | string | 是 | - | 参考音频文件路径 |
 | `ref_text` | string | 否 | null | 参考音频文本，1-5000 字符 |
 | `instruct` | string | 否 | null | 情感描述，1-500 字符 |
-| `inference_timesteps` | int | 否 | 5 | 扩散步数，1-10 |
-| `cfg_value` | number | 否 | 3.0 | CFG 强度，0.5-5.0 |
+| `inference_timesteps` | int | 否 | 6 | 扩散步数，1-10 |
+| `cfg_value` | number | 否 | 4.0 | CFG 强度，0.5-5.0 |
 | `save_file` | bool | 否 | true | `false`=直接返回 WAV 二进制流 |
 
 **Response (200, save_file=true):**
@@ -386,8 +412,8 @@ POST /vox/design
 |------|------|------|--------|------|
 | `text` | string | 是 | - | 目标文本，1-5000 字符 |
 | `instruct` | string | 是 | - | 声音描述，1-500 字符 |
-| `inference_timesteps` | int | 否 | 7 | 扩散步数，1-10 |
-| `cfg_value` | number | 否 | 3.0 | CFG 强度，0.5-5.0 |
+| `inference_timesteps` | int | 否 | 6 | 扩散步数，1-10 |
+| `cfg_value` | number | 否 | 4.0 | CFG 强度，0.5-5.0 |
 | `save_file` | bool | 否 | true | `false`=直接返回 WAV 二进制流 |
 
 **Response (200, save_file=true):**
@@ -454,7 +480,74 @@ GET /files?limit=100&offset=0
 
 ---
 
-## 8. 错误码
+## 8. 缓存管理
+
+### 8.1 查看缓存状态
+
+```
+GET /cache
+```
+
+查看 `api_output/` 目录的缓存情况。
+
+**Response (200):**
+```json
+{
+  "total_files": 42,
+  "total_bytes": 52428800,
+  "total_mb": 50.0,
+  "oldest_file": "clone_abc123.wav",
+  "newest_file": "vox_def456.wav",
+  "oldest_age_hours": 72.5
+}
+```
+
+### 8.2 清理缓存
+
+```
+POST /cleanup
+```
+
+三种清理模式：
+
+**Request Body (all — 一键清空):**
+```json
+{"mode": "all"}
+```
+
+**Request Body (older_than — 按过期时间):**
+```json
+{"mode": "older_than", "expire_hours": 24}
+```
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `mode` | string | 是 | - | `all` / `older_than` / `by_size` |
+| `expire_hours` | float | 否 | null | `older_than` 模式时必填，过期小时数，0.1~720 |
+| `max_size_mb` | float | 否 | null | `by_size` 模式时必填，大小上限 MB，1~100000 |
+
+**Request Body (by_size — 按占用大小):**
+```json
+{"mode": "by_size", "max_size_mb": 500}
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "mode": "older_than",
+  "deleted_count": 15,
+  "kept_count": 27,
+  "freed_bytes": 20971520,
+  "freed_mb": 20.0,
+  "deleted_files": ["old_file1.wav", "old_file2.wav"],
+  "kept_files": ["new_file1.wav", "new_file2.wav"]
+}
+```
+
+---
+
+## 9. 错误码
 
 | 状态码 | 含义 | 说明 |
 |--------|------|------|
@@ -481,8 +574,6 @@ GET /files?limit=100&offset=0
 | `TTS_SERVE_HOST` | `127.0.0.1` | 绑定地址 |
 | `TTS_SERVE_LOG_LEVEL` | `warning` | 日志级别 |
 | `TTS_SERVE_MODELS_DIR` | `./models` | 模型目录基础路径 |
-| `TTS_SERVE_API_URL` | `http://localhost:8000` | WebUI 连接 API 的 URL |
-| `TTS_SERVE_AUTO_START_API` | `1` | WebUI 是否自动启动 API 服务器 |
 
 ---
 

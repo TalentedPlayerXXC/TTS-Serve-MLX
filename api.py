@@ -5,6 +5,7 @@ import os
 import uuid
 import threading
 import logging
+import time
 from pathlib import Path
 from typing import Optional, List
 from contextlib import asynccontextmanager
@@ -40,9 +41,8 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 _model_lock = threading.Lock()
 
 _qwen_tts: Optional[TTSClone] = None
-_qwen_asr = None
 _vox = None
-_asr_loaded_at = None  # 记录 ASR 加载路径，用于判断是否需要重新注入
+_stt_model = None  # 独立 STT 模型，不与 TTS 绑定
 
 
 def _validate_audio_path(audio_path: str) -> Path:
@@ -63,47 +63,28 @@ def _validate_filename(filename: str) -> str:
     return filename
 
 
-def _inject_asr_to_tts():
-    global _qwen_tts, _qwen_asr, _asr_loaded_at
-    if _qwen_tts is not None and _qwen_asr is not None:
-        if _qwen_tts.asr_model is None or _asr_loaded_at != id(_qwen_asr):
-            _qwen_tts.asr_model = _qwen_asr
-            _asr_loaded_at = id(_qwen_asr)
-            logger.info("ASR 模型已注入到 TTSClone")
-
-
 def load_qwen3():
-    global _qwen_tts, _qwen_asr
+    global _qwen_tts
     with _model_lock:
-        if _qwen_tts is not None and _qwen_asr is not None:
-            logger.info("TTS 模型已加载，跳过")
+        if _qwen_tts is not None:
+            logger.info("Qwen3 TTS 模型已加载，跳过")
             return
 
-        if _qwen_tts is None:
-            logger.info("加载 Qwen3 TTS 模型: %s", TTS_MODEL_PATH)
-            _qwen_tts = TTSClone(model_path=TTS_MODEL_PATH)
-            _ = _qwen_tts.model
-            logger.info("Qwen3 TTS 模型加载完成")
-
-        if _qwen_asr is None:
-            logger.info("加载 Whisper ASR 模型: %s", ASR_MODEL_PATH)
-            from mlx_audio.stt import load as load_whisper
-            _qwen_asr = load_whisper(ASR_MODEL_PATH)
-            logger.info("ASR 模型加载完成")
-            _inject_asr_to_tts()
+        logger.info("加载 Qwen3 TTS 模型: %s", TTS_MODEL_PATH)
+        _qwen_tts = TTSClone(model_path=TTS_MODEL_PATH)
+        _ = _qwen_tts.model
+        logger.info("Qwen3 TTS 模型加载完成")
 
 
 def unload_qwen3():
-    global _qwen_tts, _qwen_asr
+    global _qwen_tts
     with _model_lock:
         if _qwen_tts:
-            _qwen_tts.asr_model = None
             _qwen_tts.unload()
             _qwen_tts = None
-        _qwen_asr = None
         import gc
         gc.collect()
-        logger.info("TTS 模型已卸载")
+        logger.info("Qwen3 TTS 模型已卸载")
 
 
 def load_vox():
@@ -136,9 +117,30 @@ def require_qwen3():
         raise HTTPException(status_code=503, detail="TTS 模型未加载，请先调用 POST /model/load {\"model\": \"tts\"}")
 
 
-def require_asr():
-    if _qwen_asr is None:
-        raise HTTPException(status_code=503, detail="ASR 模型未加载，请先加载 TTS 模型: POST /model/load {\"model\": \"tts\"}")
+def load_stt():
+    global _stt_model
+    with _model_lock:
+        if _stt_model is not None:
+            logger.info("STT 模型已加载，跳过")
+            return
+        logger.info("加载 Whisper STT 模型: %s", ASR_MODEL_PATH)
+        from mlx_audio.stt import load as load_whisper
+        _stt_model = load_whisper(ASR_MODEL_PATH)
+        logger.info("STT 模型加载完成")
+
+
+def unload_stt():
+    global _stt_model
+    with _model_lock:
+        _stt_model = None
+        import gc
+        gc.collect()
+        logger.info("STT 模型已卸载")
+
+
+def require_stt():
+    if _stt_model is None:
+        raise HTTPException(status_code=503, detail="STT 模型未加载，请先调用 POST /model/load {\"model\": \"stt\"}")
 
 
 def require_vox():
@@ -157,6 +159,7 @@ async def lifespan(app: FastAPI):
     logger.info("正在释放模型资源...")
     unload_qwen3()
     unload_vox()
+    unload_stt()
     logger.info("资源已释放")
 
 
@@ -239,8 +242,19 @@ class STTRequest(BaseModel):
     ref_audio: str = Field(..., min_length=1)
 
 
+class CleanupRequest(BaseModel):
+    """缓存清理请求"""
+    mode: str = Field(..., pattern="^(all|older_than|by_size)$")
+    expire_hours: Optional[float] = Field(None, ge=0.1, le=720)
+    max_size_mb: Optional[float] = Field(None, ge=1, le=100000)
+
+
 class ModelLoadRequest(BaseModel):
-    model: str = Field(..., pattern="^(tts|voxcpm2)$")
+    model: str = Field(..., pattern="^(tts|voxcpm2|stt)$")
+
+
+class ModelUnloadRequest(BaseModel):
+    model: Optional[str] = Field(None, pattern="^(tts|voxcpm2|stt)$")
 
 
 class VoxCloneRequest(BaseModel):
@@ -249,8 +263,8 @@ class VoxCloneRequest(BaseModel):
     ref_audio: str = Field(..., min_length=1)
     ref_text: Optional[str] = Field(None, min_length=1, max_length=5000)
     instruct: Optional[str] = Field(None, min_length=1, max_length=500)
-    inference_timesteps: int = Field(5, ge=1, le=10)
-    cfg_value: float = Field(3.0, ge=0.5, le=5.0)
+    inference_timesteps: int = Field(6, ge=1, le=10)
+    cfg_value: float = Field(4.0, ge=0.5, le=5.0)
     save_file: bool = True            # False=直接返回 WAV 流
 
 
@@ -258,8 +272,8 @@ class VoxDesignRequest(BaseModel):
     """VoxCPM2 声音设计请求"""
     text: str = Field(..., min_length=1, max_length=5000)
     instruct: str = Field(..., min_length=1, max_length=500)
-    inference_timesteps: int = Field(7, ge=1, le=10)
-    cfg_value: float = Field(3.0, ge=0.5, le=5.0)
+    inference_timesteps: int = Field(6, ge=1, le=10)
+    cfg_value: float = Field(4.0, ge=0.5, le=5.0)
     save_file: bool = True            # False=直接返回 WAV 流
 
 
@@ -272,7 +286,7 @@ async def health_check():
     return {
         "status": "ok",
         "qwen3_loaded": _qwen_tts is not None,
-        "whisper_loaded": _qwen_asr is not None,
+        "stt_loaded": _stt_model is not None,
         "voxcpm2_loaded": _vox is not None,
     }
 
@@ -283,11 +297,10 @@ async def model_info():
         "qwen3": {
             "path": TTS_MODEL_PATH,
             "loaded": _qwen_tts is not None,
-            "has_asr_injected": _qwen_tts is not None and _qwen_tts.asr_model is not None,
         },
-        "whisper": {
+        "stt": {
             "path": ASR_MODEL_PATH,
-            "loaded": _qwen_asr is not None,
+            "loaded": _stt_model is not None,
         },
         "voxcpm2": {
             "path": VOX_MODEL_PATH,
@@ -300,7 +313,7 @@ async def model_info():
 async def model_status():
     return {
         "qwen3": _qwen_tts is not None,
-        "whisper": _qwen_asr is not None,
+        "stt": _stt_model is not None,
         "voxcpm2": _vox is not None,
     }
 
@@ -312,6 +325,8 @@ async def model_load(request: ModelLoadRequest):
             load_qwen3()
         elif request.model == "voxcpm2":
             load_vox()
+        elif request.model == "stt":
+            load_stt()
         return {"success": True, "model": request.model, "action": "loaded"}
     except Exception as e:
         logger.exception("Unhandled error in endpoint")
@@ -319,11 +334,20 @@ async def model_load(request: ModelLoadRequest):
 
 
 @app.post("/model/unload")
-async def model_unload(request: ModelLoadRequest):
+async def model_unload(request: ModelUnloadRequest = None):
+    if request is None or request.model is None:
+        # 不传参数 = 全部卸载
+        unload_qwen3()
+        unload_vox()
+        unload_stt()
+        return {"success": True, "model": "all", "action": "unloaded"}
+
     if request.model == "tts":
         unload_qwen3()
     elif request.model == "voxcpm2":
         unload_vox()
+    elif request.model == "stt":
+        unload_stt()
     return {"success": True, "model": request.model, "action": "unloaded"}
 
 
@@ -576,15 +600,14 @@ async def speech_to_text(request: STTRequest):
     Returns:
         - **text**: 识别出的文本
     """
-    require_asr()
-    
+    require_stt()
+
     audio_path = _validate_audio_path(request.ref_audio)
     if not audio_path.exists():
         raise HTTPException(status_code=400, detail=f"音频文件不存在: {request.ref_audio}")
-    
+
     try:
-        # mlx_audio.stt API: model.generate(audio_path) → result.text
-        result = _qwen_asr.generate(str(audio_path))
+        result = _stt_model.generate(str(audio_path))
         
         text = result.text if hasattr(result, 'text') else str(result)
         
@@ -734,6 +757,123 @@ async def list_files(limit: int = Query(default=100, ge=1, le=1000),
 
 
 # ============================================================
+# 缓存信息
+# ============================================================
+
+@app.get("/cache")
+async def cache_info():
+    """查看缓存状态：文件数、总大小、最旧/最新文件"""
+    all_files = sorted(
+        [f for f in OUTPUT_DIR.iterdir() if f.is_file()],
+        key=lambda f: f.stat().st_mtime,
+    )
+    total_files = len(all_files)
+    total_bytes = sum(f.stat().st_size for f in all_files)
+    oldest = all_files[0].name if all_files else None
+    newest = all_files[-1].name if all_files else None
+    oldest_age = time.time() - all_files[0].stat().st_mtime if all_files else 0
+
+    return {
+        "total_files": total_files,
+        "total_bytes": total_bytes,
+        "total_mb": round(total_bytes / 1024 / 1024, 2),
+        "oldest_file": oldest,
+        "newest_file": newest,
+        "oldest_age_hours": round(oldest_age / 3600, 1),
+    }
+
+
+# ============================================================
+# 缓存清理
+# ============================================================
+
+@app.post("/cleanup")
+async def cleanup_cache(request: CleanupRequest):
+    """清理生成的音频缓存
+
+    三种模式:
+    - all: 一键清空
+    - older_than: 按过期时间（小时），如 {"mode": "older_than", "expire_hours": 24}
+    - by_size: 按占用大小（MB）保留最新的，如 {"mode": "by_size", "max_size_mb": 500}
+    """
+    all_files = sorted(
+        [f for f in OUTPUT_DIR.iterdir() if f.is_file()],
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
+
+    now = time.time()
+    deleted = []
+    kept = []
+
+    if request.mode == "all":
+        # 全部删除
+        for f in all_files:
+            size = f.stat().st_size
+            f.unlink()
+            deleted.append({"filename": f.name, "size": size})
+        logger.info("清理全部缓存: %d 个文件", len(deleted))
+
+    elif request.mode == "older_than":
+        if request.expire_hours is None:
+            raise HTTPException(status_code=400, detail="older_than 模式需要 expire_hours 参数")
+        cutoff = now - request.expire_hours * 3600
+        for f in all_files:
+            if f.stat().st_mtime < cutoff:
+                size = f.stat().st_size
+                f.unlink()
+                deleted.append({"filename": f.name, "size": size})
+            else:
+                kept.append(f.name)
+        logger.info("清理 %d 小时前的缓存: 删 %d 个, 留 %d 个",
+                     request.expire_hours, len(deleted), len(kept))
+
+    elif request.mode == "by_size":
+        if request.max_size_mb is None:
+            raise HTTPException(status_code=400, detail="by_size 模式需要 max_size_mb 参数")
+        max_bytes = request.max_size_mb * 1024 * 1024
+        total_bytes = sum(f.stat().st_size for f in all_files)
+
+        if total_bytes <= max_bytes:
+            kept = [f.name for f in all_files]
+            logger.info("缓存大小 %.1fMB 未超限 %.1fMB，无需清理",
+                         total_bytes / 1024 / 1024, request.max_size_mb)
+        else:
+            # 从最旧的开始删，直到低于上限
+            # all_files 已按 mtime 降序（最新在前），反过来从最后删
+            to_delete = []
+            to_keep = []
+            running_total = 0
+            for f in reversed(all_files):  # 从最旧开始
+                size = f.stat().st_size
+                if running_total + size > max_bytes:
+                    to_delete.append((f, size))
+                else:
+                    running_total += size
+                    to_keep.append(f)
+
+            for f, size in to_delete:
+                f.unlink()
+                deleted.append({"filename": f.name, "size": size})
+            kept = [f.name for f in to_keep]
+            logger.info("按大小清理: 上限 %.1fMB, 当前 %.1fMB, 删 %d 个, 留 %d 个",
+                         request.max_size_mb, total_bytes / 1024 / 1024,
+                         len(deleted), len(kept))
+
+    total_deleted = sum(d["size"] for d in deleted)
+    return {
+        "success": True,
+        "mode": request.mode,
+        "deleted_count": len(deleted),
+        "kept_count": len(kept),
+        "freed_bytes": total_deleted,
+        "freed_mb": round(total_deleted / 1024 / 1024, 2),
+        "deleted_files": [d["filename"] for d in deleted[:20]],  # 最多列20个
+        "kept_files": kept[:20],
+    }
+
+
+# ============================================================
 # 启动
 # ============================================================
 
@@ -747,9 +887,9 @@ if __name__ == "__main__":
     logger.info("=" * 60)
     logger.info("启动 TTS-Serve API 服务（启动时不预载模型）")
     logger.info("=" * 60)
-    logger.info("TTS 模型: %s", TTS_MODEL_PATH)
-    logger.info("ASR 模型: %s", ASR_MODEL_PATH)
-    logger.info("VoxCPM2: %s", VOX_MODEL_PATH)
+    logger.info("TTS 模型（Speaker 模式）: %s", TTS_MODEL_PATH)
+    logger.info("STT 模型（独立加载）: %s", ASR_MODEL_PATH)
+    logger.info("VoxCPM2（情感克隆/设计）: %s", VOX_MODEL_PATH)
     logger.info("输出目录: %s", OUTPUT_DIR)
     logger.info("API 文档: http://%s:%d/docs", host, port)
     logger.info("=" * 60)

@@ -8,13 +8,16 @@ TTS-Serve 语音克隆模块
 - 内置音频后处理（归一化、淡入淡出、交叉淡入淡出拼接）
 - 作为模块被 api.py 或其他文件导入调用
 
-调用方式：
-    from tts_clone import TTSClone
+|    调用方式：
+        from tts_clone import TTSClone
 
-    tts = TTSClone(model_path="./models/qwenTTS_0.6B_MLX")
+        tts = TTSClone(model_path="./models/qwenTTS_0.6B_MLX")
 
-    # 单人配音（ref_text 不传则自动 STT 识别）
-    audio = tts.generate("要转换的文本", "参考音频.wav")
+        # 单人配音（ref_text 不传走 Speaker Embedding 模式）
+        audio = tts.generate("要转换的文本", "参考音频.wav")
+
+        # 带 ref_text 的 ICL 模式（情感还原更好）
+        audio = tts.generate("要转换的文本", "参考音频.wav", ref_text="参考音频原文")
 
     # 批量配音
     results = tts.batch_generate([
@@ -193,23 +196,20 @@ class TTSClone:
         tts.merge_and_save(results, "output.wav")
     """
     
-    def __init__(self, model_path: str = "./models/qwenTTS_0.6B_MLX", sample_rate: int = 24000,
-                 asr_model=None):
+    def __init__(self, model_path: str = "./models/qwenTTS_0.6B_MLX", sample_rate: int = 24000):
         """
         初始化 TTSClone
-        
+
         Args:
             model_path: 模型路径或 HuggingFace 模型 ID
             sample_rate: 音频采样率
-            asr_model: 已加载的 ASR 模型实例（用于 ref_text 转录，避免重复加载 Whisper）
         """
         from mlx_audio.tts.utils import load_model
-        
+
         self.model_path = model_path
         self.sample_rate = sample_rate
         self._model = None
-        self.asr_model = asr_model
-    
+
     @property
     def model(self):
         if self._model is None:
@@ -218,17 +218,20 @@ class TTSClone:
             self._model = load_model(self.model_path)
             logger.info("模型加载完成")
         return self._model
-    
+
     def generate(self, text: str, ref_audio: str, ref_text: Optional[str] = None,
                  stream: bool = False,
                  output_path: Optional[str] = None, apply_fade_process: bool = True) -> Optional[np.ndarray]:
         """
         使用语音克隆生成单条音频
-        
+
+        ref_text 不传时自动使用 Speaker Embedding 模式（仅提取音色，不依赖 ASR）。
+        传 ref_text 时使用 ICL 模式（更精确的情感还原，但需要预留文本）。
+
         Args:
             text: 要转换的文本
             ref_audio: 参考音频文件路径
-            ref_text: 参考音频对应的文本（可选，不传则自动识别）
+            ref_text: 参考音频对应的文本（可选，不传则走 Speaker Embedding 模式）
             output_path: 可选，输出文件路径
             apply_fade_process: 是否应用淡入淡出处理
         
@@ -254,21 +257,10 @@ class TTSClone:
         if not ref_path.exists():
             logger.warning("参考音频不存在: %s", ref_audio)
             return None
-        
-        if not ref_text:
-            logger.info("自动识别参考音频文字: %s", str(ref_path))
-            try:
-                if self.asr_model is not None:
-                    ref_text = self.asr_model.transcribe_simple(str(ref_path))
-                else:
-                    from stt import get_ref_audio_text
-                    ref_text = get_ref_audio_text(str(ref_path))
-                logger.info("识别结果: %s", ref_text[:60] + ('...' if len(ref_text) > 60 else ''))
-            except Exception as e:
-                logger.error("参考音频文字识别失败: %s", e)
-                logger.error("音频路径: %s", ref_audio)
-                return None
-        
+
+        # ref_text 不传时走 Speaker Embedding 模式（Qwen3-TTS 内置 speaker_encoder）
+        # 传了则走 ICL 模式
+
         try:
             if stream:
                 chunks = []
