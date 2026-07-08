@@ -84,6 +84,8 @@ def unload_qwen3():
             _qwen_tts = None
         import gc
         gc.collect()
+        import mlx.core as mx
+        mx.clear_cache()
         logger.info("Qwen3 TTS 模型已卸载")
 
 
@@ -105,6 +107,8 @@ def unload_vox():
         _vox = None
         import gc
         gc.collect()
+        import mlx.core as mx
+        mx.clear_cache()
         logger.info("VoxCPM2 模型已卸载")
 
 
@@ -135,6 +139,8 @@ def unload_stt():
         _stt_model = None
         import gc
         gc.collect()
+        import mlx.core as mx
+        mx.clear_cache()
         logger.info("STT 模型已卸载")
 
 

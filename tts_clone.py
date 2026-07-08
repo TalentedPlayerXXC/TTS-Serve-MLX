@@ -409,6 +409,8 @@ class TTSClone:
         self._model = None
         import gc
         gc.collect()
+        import mlx.core as mx
+        mx.clear_cache()
 
 
 
