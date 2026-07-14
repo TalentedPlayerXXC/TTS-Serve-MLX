@@ -12,7 +12,6 @@ set -euo pipefail
 #   ├── _internal/          ← Python 运行时
 #   └── models/             ← 空结构，放置模型文件
 #       ├── qwenTTS_0.6B_MLX/
-#       ├── whisper_asr_MLX/
 #       └── voxCPM2_4bit_MLX/
 #
 # 前置条件:
@@ -36,7 +35,7 @@ echo ""
 
 # ---- 检查依赖 ----
 echo "[1/5] 检查依赖..."
-python3 -c "import fastapi, uvicorn, soundfile, numpy, mlx, mlx_audio, tts_clone, stt" 2>/dev/null || {
+python3 -c "import fastapi, uvicorn, soundfile, numpy, mlx, mlx_audio, tts_clone" 2>/dev/null || {
     echo "[!] 部分依赖缺失，正在安装..."
     pip install -r requirements.txt
 }
@@ -57,7 +56,6 @@ echo ""
 echo "[3/5] 检查模型文件（验证用，不打包）..."
 MODELS=(
     "models/qwenTTS_0.6B_MLX"
-    "models/whisper_asr_MLX"
     "models/voxCPM2_4bit_MLX"
 )
 for d in "${MODELS[@]}"; do
@@ -90,11 +88,8 @@ python3 -m PyInstaller \
   --add-binary "$LIBSNDFILE:." \
   --hidden-import "api" \
   --hidden-import "tts_clone" \
-  --hidden-import "stt" \
   --hidden-import "mlx_audio.tts.utils" \
   --hidden-import "mlx_audio.tts.models.qwen3_tts" \
-  --hidden-import "mlx_audio.stt.utils" \
-  --hidden-import "mlx_audio.stt.models.whisper" \
   --hidden-import "mlx_lm" \
   --collect-all "mlx_audio" \
   --collect-all "mlx" \
@@ -107,7 +102,7 @@ echo ""
 
 # ---- 创建空 models/ 目录结构 + 说明文件 ----
 echo "创建模型目录结构 (空壳 + 说明)..."
-for subdir in qwenTTS_0.6B_MLX whisper_asr_MLX voxCPM2_4bit_MLX; do
+for subdir in qwenTTS_0.6B_MLX voxCPM2_4bit_MLX; do
     mkdir -p "$MODELS_OUT/$subdir"
 done
 
@@ -124,20 +119,6 @@ cat > "$MODELS_OUT/qwenTTS_0.6B_MLX/README.txt" << 'README'
 下载:
   HF:          huggingface-cli download mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit --local-dir ./models/qwenTTS_0.6B_MLX
   魔搭(无需代理): git clone https://www.modelscope.cn/aufklarer/Qwen3-TTS-12Hz-0.6B-Base-MLX-4bit.git ./models/qwenTTS_0.6B_MLX
-README
-
-cat > "$MODELS_OUT/whisper_asr_MLX/README.txt" << 'README'
-模型: Whisper Large v3 Turbo ASR (fp16)
-来源: mlx-community/whisper-large-v3-turbo-asr-fp16
-用途: 语音转文本（独立加载，不与 TTS 绑定）
-
-文件清单:
-  - model.safetensors (主模型 ~1.5GB)
-  - config.json, tokenizer.json, vocab.json 等
-
-下载:
-  HF:          huggingface-cli download mlx-community/whisper-large-v3-turbo-asr-fp16 --local-dir ./models/whisper_asr_MLX
-  魔搭(无需代理): git clone https://www.modelscope.cn/NexaAIDev/whisper-large-v3-turbo-MLX.git ./models/whisper_asr_MLX
 README
 
 cat > "$MODELS_OUT/voxCPM2_4bit_MLX/README.txt" << 'README'
@@ -172,7 +153,6 @@ echo ""
 echo "使用方式:"
 echo "  1. 将模型文件复制到:"
 echo "     $DIST_DIR/models/qwenTTS_0.6B_MLX/"
-echo "     $DIST_DIR/models/whisper_asr_MLX/"
 echo "     $DIST_DIR/models/voxCPM2_4bit_MLX/"
 echo "  2. 启动服务:"
 echo "     $DIST_DIR/tts_serve_mlx"

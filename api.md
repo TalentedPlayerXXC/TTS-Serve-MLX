@@ -1,6 +1,6 @@
 # TTS-Serve API 文档
 
-基于 FastAPI 的多功能语音服务，提供语音克隆、批量配音、语音转文本（STT）、情感克隆、声音设计功能。
+基于 FastAPI 的多功能语音服务，提供语音克隆、批量配音、情感克隆、声音设计功能。
 
 - **基础 URL**: `http://localhost:8000`
 - **API 文档**: `http://localhost:8000/docs` (Swagger UI)
@@ -14,9 +14,8 @@
 
 | 模型 | 功能 | 默认参数 |
 |------|------|---------|
-| **Qwen3-TTS**（Speaker 模式） | 语音克隆、批量配音、对话生成 | 无 ASR，Speaker Embedding |
+| **Qwen3-TTS**（Speaker 模式） | 语音克隆、批量配音、对话生成 | Speaker Embedding，无 ASR |
 | **VoxCPM2** | 情感克隆、声音设计 | steps=6, cfg=4.0 |
-| **Whisper STT**（独立） | 语音转文本 | 独立加载，不与 TTS 绑定 |
 
 ---
 
@@ -26,9 +25,9 @@
 2. [语音克隆](#2-语音克隆)
 3. [批量配音](#3-批量配音)
 4. [对话生成](#4-对话生成)
-5. [语音转文本 (STT)](#5-语音转文本-stt)
-6. [VoxCPM2 生成](#6-voxcpm2-生成)
-7. [文件管理](#7-文件管理)
+5. [VoxCPM2 生成](#5-voxcpm2-生成)
+6. [文件管理](#6-文件管理)
+7. [缓存管理](#7-缓存管理)
 8. [错误码](#8-错误码)
 
 ---
@@ -36,9 +35,6 @@
 ## 1. 模型管理
 
 模型默认**不预加载**，需先调用 `/model/load` 加载后再使用其他接口。
-
-> **注意**：Qwen3-TTS 默认使用 Speaker Embedding 模式（无需 ASR）。
-> STT 模型**独立加载**，不与 TTS 绑定。需要语音转文本时单独 `POST /model/load {"model": "stt"}`。
 
 ### 1.1 健康检查
 
@@ -51,7 +47,6 @@ GET /health
 {
   "status": "ok",
   "qwen3_loaded": false,
-  "stt_loaded": false,
   "voxcpm2_loaded": false
 }
 ```
@@ -67,10 +62,6 @@ GET /model-info
 {
   "qwen3": {
     "path": "./models/qwenTTS_0.6B_MLX",
-    "loaded": false
-  },
-  "stt": {
-    "path": "./models/whisper_asr_MLX",
     "loaded": false
   },
   "voxcpm2": {
@@ -90,7 +81,6 @@ GET /model/status
 ```json
 {
   "qwen3": false,
-  "stt": false,
   "voxcpm2": false
 }
 ```
@@ -110,7 +100,7 @@ POST /model/load
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `model` | string | 是 | 模型名称，可选 `"tts"`（Qwen3 TTS, Speaker 模式）、`"voxcpm2"`（情感克隆/设计）、`"stt"`（Whisper 语音转文本） |
+| `model` | string | 是 | 模型名称，可选 `"tts"`（Qwen3 TTS, Speaker 模式）、`"voxcpm2"`（情感克隆/设计） |
 
 **Response:**
 ```json
@@ -138,7 +128,7 @@ POST /model/unload
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `model` | string | 否 | 不传=全部卸载，可选 `"tts"`、`"voxcpm2"`、`"stt"` |
+| `model` | string | 否 | 不传=全部卸载，可选 `"tts"`、`"voxcpm2"` |
 
 **Response (200):**
 ```json
@@ -313,43 +303,11 @@ POST /dialogue
 
 ---
 
-## 5. 语音转文本 (STT)
-
-使用 Whisper 模型将音频转换为文字。
-
-> STT 模型需单独加载：`POST /model/load {"model": "stt"}`，不与 TTS 绑定。
-
-```
-POST /stt
-```
-
-**Request Body:**
-```json
-{
-  "ref_audio": "./audio/speech.wav"
-}
-```
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `ref_audio` | string | 是 | 音频文件路径 |
-
-**Response (200):**
-```json
-{
-  "success": true,
-  "ref_audio": "./audio/speech.wav",
-  "text": "识别出的文本内容"
-}
-```
-
----
-
-## 6. VoxCPM2 生成
+## 5. VoxCPM2 生成
 
 使用 VoxCPM2 扩散模型生成语音（需先 `POST /model/load {"model": "voxcpm2"}` 加载模型）。
 
-### 6.1 声音克隆 + 情感
+### 5.1 声音克隆 + 情感
 
 ```
 POST /vox/clone
@@ -392,7 +350,7 @@ POST /vox/clone
 ```
 > `save_file=false` 时返回 `audio/wav` 二进制流。
 
-### 6.2 声音设计
+### 5.2 声音设计
 
 ```
 POST /vox/design
@@ -433,21 +391,21 @@ POST /vox/design
 
 ---
 
-## 7. 文件管理
+---
 
-### 7.1 获取音频文件
+## 6. 文件管理
+
+### 6.1 获取音频文件
 
 ```
 GET /files/{filename}
 ```
 
-返回 `audio/wav` 类型的文件响应。
-
 > 文件名不能包含 `/`、`\` 或以 `.` 开头。
 
 **Response (200):** 二进制 WAV 音频数据
 
-### 7.2 列出生成文件
+### 6.2 列出生成文件
 
 ```
 GET /files?limit=100&offset=0
@@ -474,15 +432,15 @@ GET /files?limit=100&offset=0
 }
 ```
 
-### 7.3 直接静态访问
+### 6.3 直接静态访问
 
 所有生成的音频文件也可通过 `/output/{filename}` 直接访问。
 
 ---
 
-## 8. 缓存管理
+## 7. 缓存管理
 
-### 8.1 查看缓存状态
+### 7.1 查看缓存状态
 
 ```
 GET /cache
@@ -502,7 +460,7 @@ GET /cache
 }
 ```
 
-### 8.2 清理缓存
+### 7.2 清理缓存
 
 ```
 POST /cleanup
@@ -547,7 +505,7 @@ POST /cleanup
 
 ---
 
-## 9. 错误码
+## 8. 错误码
 
 | 状态码 | 含义 | 说明 |
 |--------|------|------|
@@ -595,9 +553,4 @@ curl -X POST http://localhost:8000/clone \
 
 # 4. 获取音频
 curl -O http://localhost:8000/output/clone_abc12345.wav
-
-# 5. 语音转文本
-curl -X POST http://localhost:8000/stt \
-  -H "Content-Type: application/json" \
-  -d '{"ref_audio": "./audio/speech.wav"}'
 ```

@@ -14,13 +14,12 @@ Electron 主进程
        ├── POST /model/load          → 加载模型 (tts / voxcpm2)
        ├── POST /model/unload        → 卸载模型
        │
-        ├── POST /clone               → 语音克隆
-        ├── POST /batch-clone         → 批量配音
-        ├── POST /dialogue            → 多角色对话
-        ├── POST /vox/clone           → VoxCPM2 克隆+情感
-        ├── POST /vox/design          → VoxCPM2 声音设计
+       ├── POST /clone               → 语音克隆
+       ├── POST /batch-clone         → 批量配音
+       ├── POST /dialogue            → 多角色对话
        │
-       ├── POST /stt                 → 语音转文本
+       ├── POST /vox/clone           → VoxCPM2 克隆+情感
+       ├── POST /vox/design          → VoxCPM2 声音设计
        │
        ├── GET  /files               → 文件列表
        ├── GET  /files/{filename}    → 下载文件
@@ -210,16 +209,6 @@ async function ttsBatchClone(
         body: JSON.stringify({ items, merge, return_raw: returnRaw }),
     });
     if (returnRaw) return res.arrayBuffer();
-    return res.json();
-}
-
-/** 语音转文本 */
-async function stt(refAudio: string) {
-    const res = await fetch(`http://${SERVER_HOST}:${SERVER_PORT}/stt`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref_audio: refAudio }),
-    });
     return res.json();
 }
 

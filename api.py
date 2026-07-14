@@ -42,7 +42,6 @@ _model_lock = threading.Lock()
 
 _qwen_tts: Optional[TTSClone] = None
 _vox = None
-_stt_model = None  # 独立 STT 模型，不与 TTS 绑定
 
 
 def _validate_audio_path(audio_path: str) -> Path:
@@ -121,34 +120,6 @@ def require_qwen3():
         raise HTTPException(status_code=503, detail="TTS 模型未加载，请先调用 POST /model/load {\"model\": \"tts\"}")
 
 
-def load_stt():
-    global _stt_model
-    with _model_lock:
-        if _stt_model is not None:
-            logger.info("STT 模型已加载，跳过")
-            return
-        logger.info("加载 Whisper STT 模型: %s", ASR_MODEL_PATH)
-        from mlx_audio.stt import load as load_whisper
-        _stt_model = load_whisper(ASR_MODEL_PATH)
-        logger.info("STT 模型加载完成")
-
-
-def unload_stt():
-    global _stt_model
-    with _model_lock:
-        _stt_model = None
-        import gc
-        gc.collect()
-        import mlx.core as mx
-        mx.clear_cache()
-        logger.info("STT 模型已卸载")
-
-
-def require_stt():
-    if _stt_model is None:
-        raise HTTPException(status_code=503, detail="STT 模型未加载，请先调用 POST /model/load {\"model\": \"stt\"}")
-
-
 def require_vox():
     if _vox is None:
         raise HTTPException(status_code=503, detail="VoxCPM2 模型未加载，请先调用 POST /model/load {\"model\": \"voxcpm2\"}")
@@ -165,7 +136,6 @@ async def lifespan(app: FastAPI):
     logger.info("正在释放模型资源...")
     unload_qwen3()
     unload_vox()
-    unload_stt()
     logger.info("资源已释放")
 
 
@@ -180,14 +150,12 @@ app = FastAPI(
 
 ### 功能列表
 - **TTS**：文本转语音（基础）
-- **语音克隆**：使用参考音频克隆音色和情感
+- **语音克隆**：使用参考音频克隆音色
 - **批量配音**：批量生成多段配音
-- **STT**：语音转文本
 
 ### 使用说明
-1. 语音克隆需要提供 `text`（目标文本）、`ref_audio`（参考音频路径）、`ref_text`（参考音频文本）
-2. 批量配音支持一次提交多段配音，自动合并
-3. STT 使用 Whisper 模型进行语音识别
+1. 语音克隆提供 `text`（目标文本）和 `ref_audio`（参考音频路径）即可
+2. 批量配音支持一次提交多段配音，可选合并
     """,
     version="1.0.0",
     lifespan=lifespan,
@@ -243,9 +211,12 @@ class DialogueRequest(BaseModel):
     return_raw: bool = False          # True=直接返回合并后 WAV 流
 
 
-class STTRequest(BaseModel):
-    """语音转文本请求"""
-    ref_audio: str = Field(..., min_length=1)
+class ModelLoadRequest(BaseModel):
+    model: str = Field(..., pattern="^(tts|voxcpm2)$")
+
+
+class ModelUnloadRequest(BaseModel):
+    model: Optional[str] = Field(None, pattern="^(tts|voxcpm2)$")
 
 
 class CleanupRequest(BaseModel):
@@ -253,14 +224,6 @@ class CleanupRequest(BaseModel):
     mode: str = Field(..., pattern="^(all|older_than|by_size)$")
     expire_hours: Optional[float] = Field(None, ge=0.1, le=720)
     max_size_mb: Optional[float] = Field(None, ge=1, le=100000)
-
-
-class ModelLoadRequest(BaseModel):
-    model: str = Field(..., pattern="^(tts|voxcpm2|stt)$")
-
-
-class ModelUnloadRequest(BaseModel):
-    model: Optional[str] = Field(None, pattern="^(tts|voxcpm2|stt)$")
 
 
 class VoxCloneRequest(BaseModel):
@@ -292,7 +255,6 @@ async def health_check():
     return {
         "status": "ok",
         "qwen3_loaded": _qwen_tts is not None,
-        "stt_loaded": _stt_model is not None,
         "voxcpm2_loaded": _vox is not None,
     }
 
@@ -303,10 +265,6 @@ async def model_info():
         "qwen3": {
             "path": TTS_MODEL_PATH,
             "loaded": _qwen_tts is not None,
-        },
-        "stt": {
-            "path": ASR_MODEL_PATH,
-            "loaded": _stt_model is not None,
         },
         "voxcpm2": {
             "path": VOX_MODEL_PATH,
@@ -319,7 +277,6 @@ async def model_info():
 async def model_status():
     return {
         "qwen3": _qwen_tts is not None,
-        "stt": _stt_model is not None,
         "voxcpm2": _vox is not None,
     }
 
@@ -331,8 +288,6 @@ async def model_load(request: ModelLoadRequest):
             load_qwen3()
         elif request.model == "voxcpm2":
             load_vox()
-        elif request.model == "stt":
-            load_stt()
         return {"success": True, "model": request.model, "action": "loaded"}
     except Exception as e:
         logger.exception("Unhandled error in endpoint")
@@ -345,15 +300,12 @@ async def model_unload(request: ModelUnloadRequest = None):
         # 不传参数 = 全部卸载
         unload_qwen3()
         unload_vox()
-        unload_stt()
         return {"success": True, "model": "all", "action": "unloaded"}
 
     if request.model == "tts":
         unload_qwen3()
     elif request.model == "voxcpm2":
         unload_vox()
-    elif request.model == "stt":
-        unload_stt()
     return {"success": True, "model": request.model, "action": "unloaded"}
 
 
@@ -411,7 +363,7 @@ async def voice_clone(request: CloneRequest):
         if audio is None:
             raise HTTPException(
                 status_code=500,
-                detail=f"音频生成失败（ref_audio={request.ref_audio}，请检查参考音频是否可访问、STT 识别是否成功）"
+                detail=f"音频生成失败（ref_audio={request.ref_audio}，请检查参考音频是否可访问）"
             )
         
         if not save_file:
@@ -588,44 +540,6 @@ async def generate_dialogue(request: DialogueRequest):
     except Exception as e:
         logger.exception("Unhandled error in endpoint")
         raise HTTPException(status_code=500, detail=f"对话生成失败: {str(e)}")
-
-
-# ============================================================
-# STT 接口（语音转文本）
-# ============================================================
-
-@app.post("/stt")
-async def speech_to_text(request: STTRequest):
-    """
-    语音转文本接口
-    
-    使用 Whisper 模型将音频转换为文字
-    
-    - **ref_audio**: 音频文件路径
-    
-    Returns:
-        - **text**: 识别出的文本
-    """
-    require_stt()
-
-    audio_path = _validate_audio_path(request.ref_audio)
-    if not audio_path.exists():
-        raise HTTPException(status_code=400, detail=f"音频文件不存在: {request.ref_audio}")
-
-    try:
-        result = _stt_model.generate(str(audio_path))
-        
-        text = result.text if hasattr(result, 'text') else str(result)
-        
-        return {
-            "success": True,
-            "ref_audio": request.ref_audio,
-            "text": text.strip(),
-        }
-        
-    except Exception as e:
-        logger.exception("Unhandled error in endpoint")
-        raise HTTPException(status_code=500, detail=f"STT 转换失败: {str(e)}")
 
 
 # ============================================================
@@ -893,8 +807,7 @@ if __name__ == "__main__":
     logger.info("=" * 60)
     logger.info("启动 TTS-Serve API 服务（启动时不预载模型）")
     logger.info("=" * 60)
-    logger.info("TTS 模型（Speaker 模式）: %s", TTS_MODEL_PATH)
-    logger.info("STT 模型（独立加载）: %s", ASR_MODEL_PATH)
+    logger.info("Qwen3 TTS（Speaker 模式）: %s", TTS_MODEL_PATH)
     logger.info("VoxCPM2（情感克隆/设计）: %s", VOX_MODEL_PATH)
     logger.info("输出目录: %s", OUTPUT_DIR)
     logger.info("API 文档: http://%s:%d/docs", host, port)

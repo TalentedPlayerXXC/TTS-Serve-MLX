@@ -5,7 +5,7 @@
 > 让你的 Apple Silicon Mac **一秒变身声优工作室**。
 > 克隆声音、批量配音、情感克隆、声音设计——全在本地跑，不上云，**不花钱**。
 >
-> 基于 **Qwen3-TTS** + **VoxCPM2** + **Whisper STT** 的三位一体语音服务，Apple MLX 框架驱动，M 系列芯片专属。Intel？不存在的。
+> 基于 **Qwen3-TTS** + **VoxCPM2** 的双模型语音服务，Apple MLX 框架驱动，M 系列芯片专属。Intel？不存在的。
 
 > 📢 **更新公告**：想知道每次改了啥？→ [`UPDATE.md`](UPDATE.md)，黑历史全在里面 👀
 
@@ -18,7 +18,7 @@
 | 💬 **对话生成** | Qwen3-TTS | 多角色唠嗑，自动加停顿，像模像样 |
 | 🎨 **声音设计** | VoxCPM2 | 输入「沉稳大叔音」，它真给你捏一个 |
 | 🎭 **情感克隆** | VoxCPM2 [steps=6, cfg=4.0] | 克隆音色 + 情绪指令，嬉笑怒骂随你 |
-| 👂 **语音转文本** | Whisper（独立加载） | 不听 TTS 指挥，想用才加载 |
+| 👂 ~~语音转文本~~ | ~~Whisper（已移除）~~ | ~~不再需要，ICL 已弃用~~ |
 | ~~⚡ 流式生成~~ | 都支持 | 边生边播，不等进度条（TODO：未充分测试） |
 
 ## 🧠 模型分工
@@ -35,11 +35,6 @@ VoxCPM2 [steps=6, cfg=4.0]  → 情感担当：情绪克隆、声音设计
                ├── 扩散模型，原生 instruct 支持
                ├── 输入「开心」它真开心
                └── 就是有点慢，但慢得值
-
-Whisper STT                → 独立打工人：语音转文本
-               ├── 跟 TTS 各过各的
-               ├── 按需加载，用完就卸
-               └── 省内存，不添乱
 ```
 
 ---
@@ -68,7 +63,6 @@ pip install -r requirements.txt
 ```
 models/
 ├── qwenTTS_0.6B_MLX/     ← Qwen3-TTS 0.6B（4-bit 量化，主力牛马）
-├── whisper_asr_MLX/       ← Whisper Large v3 Turbo（顺风耳，独立行动）
 └── voxCPM2_4bit_MLX/      ← VoxCPM2 2B（4-bit 量化，扩散模型，情感专家）
 ```
 
@@ -98,12 +92,11 @@ python3 server_main.py
 | `GET` | `/health` | 还活着吗？模型醒了吗？ |
 | `GET` | `/model-info` | 模型们都住哪、醒着没？ |
 | `GET` | `/model/status` | 醒了没？简洁版 |
-| `POST` | `/model/load` | 喊起床：`tts`（Speaker）、`voxcpm2`（情感）、`stt`（听写） |
+| `POST` | `/model/load` | 喊起床：`tts`（Speaker）、`voxcpm2`（情感） |
 | `POST` | `/model/unload` | 让模型回去睡，省内存 |
 | `POST` | `/clone` | 🎭 语音克隆 — Speaker 模式速通，传 ref_text 可切 ICL |
 | `POST` | `/batch-clone` | 📦 批量配音 — 一次塞 N 段，可选合并 |
 | `POST` | `/dialogue` | 💬 对话 — 多角色唠嗑，自动拼接 |
-| `POST` | `/stt` | 👂 语音转文本 — 先加载 STT 模型才能用 |
 | `POST` | `/vox/clone` | 🎤 VoxCPM2 情感克隆 — 扩散模型 + 情绪指令，默认 steps=6, cfg=4.0 |
 | `POST` | `/vox/design` | 🎨 VoxCPM2 声音设计 — 用文字捏声音，默认 steps=6, cfg=4.0 |
 | `GET` | `/files/{filename}` | ⬇️ 下载生成的音频 |
@@ -135,16 +128,7 @@ curl -X POST http://localhost:8000/vox/design \
   -H "Content-Type: application/json" \
   -d '{"text": "欢迎收听新闻", "instruct": "沉稳的中年男声，语速适中"}'
 
-# 4. 语音转文字（先加载 STT）
-curl -X POST http://localhost:8000/model/load \
-  -H "Content-Type: application/json" \
-  -d '{"model": "stt"}'
-
-curl -X POST http://localhost:8000/stt \
-  -H "Content-Type: application/json" \
-  -d '{"ref_audio": "./speech.wav"}'
-
-# 5. 下载生成的音频
+# 4. 下载生成的音频
 curl -O http://localhost:8000/output/clone_xxxx.wav
 ```
 
@@ -161,7 +145,6 @@ curl -O http://localhost:8000/output/clone_xxxx.wav
 ```
 ├── api.py                  ← FastAPI 主应用，所有接口在这
 ├── tts_clone.py            ← Qwen3 语音克隆（Speaker 模式）
-├── stt.py                  ← Whisper 语音识别（独立加载）
 ├── server_main.py          ← 服务启动入口
 ├── build.sh                ← PyInstaller 打包脚本
 ├── api.md                  ← 详细 API 文档（正经版）

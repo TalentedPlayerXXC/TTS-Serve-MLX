@@ -4,14 +4,26 @@
 
 ---
 
+## 2026-07-08 — 🗑️ 送走 STT
+
+Whisper STT 正式退役。ICL 模式已弃用，STT 再无用处，直接送走。
+
+- 删除 `stt.py`
+- `api.py` 彻底清理：移除 `stt` 全局变量、load/unload、`/stt` 端点、`ModelLoadRequest` 中 `stt` 选项
+- `build.sh` 移除 STT 相关 hidden-import 和模型目录
+- 文档全面清理：README / api.md / ELECTRON_INTEGRATION.md
+- 3个模型 → 2个模型（Qwen3-TTS + VoxCPM2），清爽多了
+
+---
+
 ## 2026-07-08 — 🧼 卸载释放资源
 
 修复了模型卸载时 GPU 内存未释放的问题：
 
-- `unload_qwen3()` / `unload_vox()` / `unload_stt()` 统一加上 `mx.clear_cache()`
+- `unload_qwen3()` / `unload_vox()` 统一加上 `mx.clear_cache()`
 - `TTSClone.unload()` 同样加上 `mx.clear_cache()`
 - 现在卸载链路完整：**删引用 → gc.collect() → MLX 清理 Metal 缓存**
-- 验证：三个模型均能正常加载→卸载→重新加载→再次正常生成
+- 验证：两个模型均能正常加载→卸载→重新加载→再次正常生成
 
 ---
 

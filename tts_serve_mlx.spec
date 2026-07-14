@@ -3,7 +3,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = []
 binaries = [('/opt/homebrew/lib/libsndfile.dylib', '.')]
-hiddenimports = ['api', 'tts_clone', 'stt', 'mlx_audio.tts.utils', 'mlx_audio.tts.models.qwen3_tts', 'mlx_audio.stt.utils', 'mlx_audio.stt.models.whisper', 'mlx_lm']
+hiddenimports = ['api', 'tts_clone', 'mlx_audio.tts.utils', 'mlx_audio.tts.models.qwen3_tts', 'mlx_lm']
 tmp_ret = collect_all('mlx_audio')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('mlx')
