@@ -310,6 +310,52 @@ async def model_unload(request: ModelUnloadRequest = None):
 
 
 # ============================================================
+# 模型下载信息（供 Electron 前端下载用）
+# ============================================================
+
+_MODEL_SOURCES = {
+    "qwen3-tts": {
+        "name": "Qwen3-TTS 0.6B (4-bit)",
+        "model_id": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
+        "path": TTS_MODEL_PATH,
+        "size_gb": 1.6,
+        "sources": {
+            "huggingface": "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
+            "modelscope": "https://modelscope.cn/aufklarer/Qwen3-TTS-12Hz-0.6B-Base-MLX-4bit",
+        },
+    },
+    "voxcpm2": {
+        "name": "VoxCPM2 2B (4-bit)",
+        "model_id": "mlx-community/VoxCPM2-4bit",
+        "path": VOX_MODEL_PATH,
+        "size_gb": 2.1,
+        "sources": {
+            "huggingface": "https://huggingface.co/mlx-community/VoxCPM2-4bit",
+            "modelscope": "https://modelscope.cn/aufklarer/VoxCPM2-MLX-int4",
+        },
+    },
+}
+
+
+@app.get("/models-info")
+async def models_info():
+    """返回模型下载信息和状态"""
+    result = {}
+    for key, info in _MODEL_SOURCES.items():
+        model_dir = Path(info["path"])
+        downloaded = model_dir.exists() and any(
+            f.suffix == ".safetensors" for f in model_dir.iterdir()
+        )
+        result[key] = {
+            "name": info["name"],
+            "downloaded": downloaded,
+            "size_gb": info["size_gb"],
+            "sources": info["sources"],
+        }
+    return result
+
+
+# ============================================================
 # 语音克隆接口
 # ============================================================
 

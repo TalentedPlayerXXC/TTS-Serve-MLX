@@ -28,7 +28,7 @@ Electron 主进程
 
 ## 1. 放置打包产物
 
-将 `dist/tts_serve_mlx/` 复制到 Electron 项目的资源目录，同时将 `models/` 目录放在同级或指定路径：
+将 `dist/tts_serve_mlx/` 复制到 Electron 项目的资源目录：
 
 ```
 your-electron-app/
@@ -37,15 +37,106 @@ your-electron-app/
           ├── tts_serve_mlx/      ← 打包产物 (不含模型)
           │   ├── tts_serve_mlx   ← 可执行文件
           │   └── _internal/
-           └── models/             ← 手动放置，结构与项目 models/ 一致
+           └── models/             ← 由 Electron 下载，无需手动放置
                ├── qwenTTS_0.6B_MLX/
                └── voxCPM2_4bit_MLX/
 ```
 
-> **注意**: `build.sh` 打包时**不包含模型文件**（模型体积大且需单独管理）。需通过 `TTS_SERVE_MODELS_DIR` 环境变量指定模型路径，或直接放在可执行文件同级的 `models/` 目录下作为默认路径。
+> **模型不需要手动放置**。启动时 Electron 通过 HTTP 从魔搭下载，详细流程见「模型下载」章节。
 
-## 2. Electron 主进程代码 (main.ts)
+## 2. 模型下载（推荐方案）
 
+服务启动后，先调 `GET /models-info` 获取模型信息和下载状态，再用 HTTP 从魔搭下载缺少的模型文件，下载完成后加载模型。
+
+```typescript
+/**
+ * 模型下载信息接口
+ */
+interface ModelInfo {
+  name: string;
+  downloaded: boolean;
+  size_gb: number;
+  sources: {
+    huggingface: string;
+    modelscope: string;   // 国内优先
+  };
+}
+
+/** 第一步：查询模型状态 */
+async function checkModels(): Promise<Record<string, ModelInfo>> {
+  const res = await fetch(`http://${SERVER_HOST}:${SERVER_PORT}/models-info`);
+  return res.json();
+}
+
+/** 第二步：下载模型文件（魔搭优先）
+ *  魔搭仓库本质上是 git 仓库，可用 git clone 或 HTTP 下载 .safetensors 文件
+ */
+async function downloadModel(
+  modelKey: string,
+  source: 'modelscope' | 'huggingface' = 'modelscope',
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<void> {
+  const infoRes = await fetch(`http://${SERVER_HOST}:${SERVER_PORT}/models-info`);
+  const allInfo = await infoRes.json();
+  const model = allInfo[modelKey];
+  if (!model || model.downloaded) return;
+
+  const modelDir = path.join(serverCwd, 'models', modelKey);
+  fs.mkdirSync(modelDir, { recursive: true });
+
+  // 以魔搭为例：需要下载的 .safetensors 文件列表
+  const files = modelKey === 'qwen3-tts'
+    ? ['model.safetensors', 'speech_tokenizer/model.safetensors']
+    : ['model.safetensors'];
+
+  for (const file of files) {
+    const url = `${model.sources[source]}/resolve/main/${file}`;
+    const dest = path.join(modelDir, file);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+
+    // HTTP 流式下载 + 进度回调
+    const response = await fetch(url);
+    const contentLength = Number(response.headers.get('content-length'));
+    const reader = response.body!.getReader();
+    const writer = fs.createWriteStream(dest);
+    let received = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.length;
+      writer.write(value);
+      onProgress?.(received, contentLength);
+    }
+    writer.end();
+  }
+}
+
+// ---- 完整启动流程 ----
+async function startApp() {
+  await startTTSServer();  // 启动 Python 服务
+
+  const models = await checkModels();
+
+  if (!models['qwen3-tts'].downloaded) {
+    await downloadModel('qwen3-tts', 'modelscope', (loaded, total) => {
+      console.log(`Qwen3-TTS: ${(loaded / 1024 / 1024).toFixed(0)}MB / ${(total / 1024 / 1024).toFixed(0)}MB`);
+    });
+  }
+
+  if (!models['voxcpm2'].downloaded) {
+    await downloadModel('voxcpm2', 'modelscope', (loaded, total) => {
+      console.log(`VoxCPM2: ${(loaded / 1024 / 1024).toFixed(0)}MB / ${(total / 1024 / 1024).toFixed(0)}MB`);
+    });
+  }
+
+  // 加载模型
+  await loadModel('tts');
+  createWindow();
+}
+```
+
+## 3. Electron 主进程代码 (main.ts)
 ```typescript
 import { app, BrowserWindow } from 'electron';
 import { spawn, ChildProcess } from 'child_process';
