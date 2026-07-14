@@ -4,7 +4,9 @@
 
 ---
 
-## 2026-07-14 — 🗑️ 送走 STT
+## 2026-07-14 — 🗑️ 送走 STT + ⚡ 批量配音优化
+
+### 🗑️ 送走 STT
 
 Whisper STT 正式退役。ICL 模式已弃用，STT 再无用处，直接送走。
 
@@ -14,9 +16,7 @@ Whisper STT 正式退役。ICL 模式已弃用，STT 再无用处，直接送走
 - 文档全面清理：README / api.md / ELECTRON_INTEGRATION.md
 - 3个模型 → 2个模型（Qwen3-TTS + VoxCPM2），清爽多了
 
----
-
-## 2026-07-14 — ⚡ 批量配音性能优化
+### ⚡ 批量配音性能优化
 
 `/batch-clone` 端点重写，三项优化：
 
