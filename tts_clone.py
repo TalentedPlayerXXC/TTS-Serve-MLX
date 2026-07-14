@@ -412,5 +412,19 @@ class TTSClone:
         import mlx.core as mx
         mx.clear_cache()
 
+    @staticmethod
+    def _save_audio_if_needed(audio_array, output_dir: Path, index: int,
+                               sample_rate: int = 24000) -> Optional[str]:
+        """按需保存单个音频文件（仅 api.py 批量接口需要返回独立文件时调用）"""
+        import os
+        import uuid
+        save_env = os.environ.get("TTS_SERVE_SAVE_INDIVIDUAL", "0")
+        if save_env != "1":
+            return None
+        filename = f"batch_{uuid.uuid4().hex[:8]}_{index+1:02d}.wav"
+        path = output_dir / filename
+        TTSClone._save_audio(audio_array, str(path), sample_rate, verbose=False)
+        return filename
+
 
 

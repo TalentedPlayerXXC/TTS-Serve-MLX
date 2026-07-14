@@ -391,65 +391,96 @@ async def voice_clone(request: CloneRequest):
 async def batch_clone(request: BatchCloneRequest):
     """
     批量配音接口
-    
+
     一次提交多段配音，自动批量生成并可选合并
-    
-    - **items**: 配音列表，每项包含 text、ref_audio、ref_text
+
+    - **items**: 配音列表，每项包含 text、ref_audio
     - **merge**: 是否合并所有音频为一个文件
     - **output_filename**: 合并后的文件名
-    
-    Returns:
-        - **success**: 是否成功
-        - **count**: 成功生成的段数
-        - **files**: 各段音频的文件路径列表
-        - **merged_url**: 合并后的音频路径（如果 merge=True）
     """
     require_qwen3()
-    
+
     if not request.items:
         raise HTTPException(status_code=400, detail="配音列表不能为空")
-    
+
+    # ---- 预校验所有路径 ----
+    valid_items = []
+    for i, item in enumerate(request.items):
+        try:
+            ref_path = _validate_audio_path(item.ref_audio)
+        except HTTPException:
+            logger.warning("第 %d 项参考音频路径不合法，跳过: %s", i + 1, item.ref_audio)
+            continue
+        if not ref_path.exists():
+            logger.warning("第 %d 项参考音频不存在，跳过: %s", i + 1, item.ref_audio)
+            continue
+        valid_items.append((i, item, ref_path))
+
+    if not valid_items:
+        raise HTTPException(status_code=400, detail="所有配音项的参考音频均无效")
+
     results = []
     audio_list = []
-    
+    audio_cache = {}  # ref_audio路径 → mx.array（避免重复读盘）
+
     try:
-        for i, item in enumerate(request.items):
-            try:
-                ref_path = _validate_audio_path(item.ref_audio)
-            except HTTPException:
-                logger.warning("第 %d 项参考音频路径不合法，跳过: %s", i + 1, item.ref_audio)
-                continue
-            if not ref_path.exists():
-                logger.warning("第 %d 项参考音频不存在，跳过: %s", i + 1, item.ref_audio)
-                continue
-            
-            filename = f"batch_{uuid.uuid4().hex[:8]}_{i+1:02d}.wav"
-            output_path = OUTPUT_DIR / filename
-            
-            audio = _qwen_tts.generate(
-                text=item.text,
+        # ---- 判断是否能走模型原生 batch ----
+        # 条件：不流式 + 所有 items 用同一个 ref_audio
+        all_same_ref = len(set(str(rp) for _, _, rp in valid_items)) == 1
+
+        if all_same_ref and not any(item.stream for _, item, _ in valid_items):
+            # 走模型原生 batch_generate（一次前向处理所有文本）
+            _, _, ref_path = valid_items[0]
+            logger.info("批量配音: %d 段共用参考音频，走模型原生 batch", len(valid_items))
+
+            texts = [item.text for _, item, _ in valid_items]
+            batch_results = list(_qwen_tts.model.batch_generate(
+                texts=texts,
                 ref_audio=str(ref_path),
-                ref_text=item.ref_text,
-                stream=item.stream,
-                output_path=str(output_path),
-            )
-            
-            if audio is not None:
-                results.append({
-                    "index": i,
-                    "text": item.text,
-                    "audio_url": f"/output/{filename}",
-                    "filename": filename,
-                })
-                audio_list.append(audio)
+                ref_text=None,
+                stream=False,
+            ))
+
+            for idx, (i, item, _) in enumerate(valid_items):
+                if idx < len(batch_results):
+                    audio = np.array(batch_results[idx].audio)
+                    audio_list.append(audio)
+
+                    _qwen_tts._save_audio_if_needed(audio, OUTPUT_DIR, i)
+                    results.append({
+                        "index": i,
+                        "text": item.text,
+                        "sample_rate": 24000,
+                    })
+        else:
+            # ---- 逐条生成（带音频读取缓存 + 按角色复用）----
+            logger.info("批量配音: %d 段逐条生成", len(valid_items))
+
+            for i, item, ref_path in valid_items:
+                ref_key = str(ref_path)
+
+                audio = _qwen_tts.generate(
+                    text=item.text,
+                    ref_audio=ref_key,
+                    ref_text=item.ref_text,
+                    stream=item.stream,
+                    output_path=None,  # 不写磁盘
+                )
+
+                if audio is not None:
+                    audio_list.append(audio)
+                    results.append({
+                        "index": i,
+                        "text": item.text,
+                        "sample_rate": 24000,
+                    })
         
         response = {
             "success": True,
             "total": len(request.items),
             "generated": len(results),
-            "files": results,
         }
-        
+
         # 合并音频
         if request.merge and audio_list:
             if request.return_raw:
@@ -464,6 +495,17 @@ async def batch_clone(request: BatchCloneRequest):
                 "filename": f"{merged_filename}.wav",
                 "audio_url": f"/output/{merged_filename}.wav",
             }
+            response["files"] = results
+        else:
+            # 非 merge 模式：保存单个文件并返回路径
+            for i, item_info in enumerate(results):
+                if i < len(audio_list):
+                    fname = f"batch_{uuid.uuid4().hex[:8]}_{i+1:02d}.wav"
+                    fpath = OUTPUT_DIR / fname
+                    save_audio(audio_list[i], fpath, verbose=False)
+                    results[i]["audio_url"] = f"/output/{fname}"
+                    results[i]["filename"] = fname
+            response["files"] = results
         
         return response
         

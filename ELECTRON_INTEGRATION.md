@@ -39,7 +39,6 @@ your-electron-app/
           │   └── _internal/
            └── models/             ← 手动放置，结构与项目 models/ 一致
                ├── qwenTTS_0.6B_MLX/
-               ├── whisper_asr_MLX/
                └── voxCPM2_4bit_MLX/
 ```
 
@@ -299,8 +298,8 @@ app.whenReady().then(async () => {
     try {
         await startTTSServer();
 
-        // 加载 TTS 模型（含 Whisper ASR），服务就绪后必须加载才能使用
-        console.log('[TTS] 正在加载 Qwen3 TTS + ASR 模型...');
+        // 加载 TTS 模型，服务就绪后必须加载才能使用
+        console.log('[TTS] 正在加载 Qwen3 TTS 模型...');
         const loaded = await loadModel('tts');
         if (!loaded) {
             throw new Error('TTS 模型加载失败');
