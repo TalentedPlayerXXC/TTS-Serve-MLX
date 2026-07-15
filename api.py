@@ -85,8 +85,9 @@ def unload_qwen3():
         import gc
         gc.collect()
         import mlx.core as mx
+        mx.set_cache_limit(0)
         mx.clear_cache()
-        logger.info("Qwen3 TTS 模型已卸载")
+        logger.info("Qwen3 TTS 模型已卸载，GPU 内存已释放")
 
 
 def load_vox():
@@ -109,8 +110,9 @@ def unload_vox():
         import gc
         gc.collect()
         import mlx.core as mx
+        mx.set_cache_limit(0)
         mx.clear_cache()
-        logger.info("VoxCPM2 模型已卸载")
+        logger.info("VoxCPM2 模型已卸载，GPU 内存已释放")
 
 
 # ============================================================
@@ -211,6 +213,7 @@ class DialogueRequest(BaseModel):
     items: List[BatchCloneItem]       # 对话列表
     output_filename: str = "dialogue" # 输出文件名
     return_raw: bool = False          # True=直接返回合并后 WAV 流
+    silence_duration: float = 0.3     # 段落间静音间隔（秒）
 
 
 class ModelLoadRequest(BaseModel):
@@ -595,8 +598,9 @@ async def batch_clone(request: BatchCloneRequest):
         # 条件：不流式 + 所有 items 用同一个 ref_audio
         all_same_ref = len(set(str(rp) for _, _, rp in valid_items)) == 1
 
-        if all_same_ref and not any(item.stream for _, item, _ in valid_items):
-            # 走模型原生 batch_generate（一次前向处理所有文本）
+        if all_same_ref and not any(item.stream for _, item, _ in valid_items)\
+           and all(item.ref_text for _, item, _ in valid_items):
+            # 走模型原生 batch_generate（仅 ICL 模式支持，Speaker 模式不走这里）
             _, _, ref_path = valid_items[0]
             logger.info("批量配音: %d 段共用参考音频，走模型原生 batch", len(valid_items))
 
@@ -689,57 +693,64 @@ async def batch_clone(request: BatchCloneRequest):
 async def generate_dialogue(request: DialogueRequest):
     """
     对话场景接口
-    
+
     生成多角色对话，自动添加静音间隔和交叉淡入淡出
-    
+
     - **items**: 对话列表
     - **output_filename**: 输出文件名（不含扩展名）
-    
-    Returns:
-        - **success**: 是否成功
-        - **audio_url**: 生成的音频文件路径
+    - **silence_duration**: 段落间静音间隔秒数（默认0.3）
     """
     require_qwen3()
-    
+
     if not request.items:
         raise HTTPException(status_code=400, detail="对话列表不能为空")
-    
+
+    # ---- 预校验所有路径 ----
+    valid_items = []
+    for i, item in enumerate(request.items):
+        try:
+            ref_path = _validate_audio_path(item.ref_audio)
+        except HTTPException:
+            logger.warning("第 %d 项参考音频路径不合法，跳过: %s", i + 1, item.ref_audio)
+            continue
+        if not ref_path.exists():
+            logger.warning("第 %d 项参考音频不存在，跳过: %s", i + 1, item.ref_audio)
+            continue
+        valid_items.append((i, item, ref_path))
+
+    if not valid_items:
+        raise HTTPException(status_code=400, detail="所有对话项的参考音频均无效")
+
+    audio_list = []
+
     try:
-        dialogue_items = [
-            {
-                "text": item.text,
-                "ref_audio": item.ref_audio,
-                "ref_text": item.ref_text,
-                "stream": item.stream,
-            }
-            for item in request.items
-        ]
-        
-        audio_list = _qwen_tts.batch_generate(
-            items=dialogue_items,
-            output_dir=str(OUTPUT_DIR),
-            save_individual=False,  # 只保存合并文件
-        )
-        
-        # 过滤 None
-        valid_audios = [a for a in audio_list if a is not None]
-        
-        if not valid_audios:
+        for i, item, ref_path in valid_items:
+            audio = _qwen_tts.generate(
+                text=item.text,
+                ref_audio=str(ref_path),
+                ref_text=item.ref_text,
+                stream=item.stream,
+                output_path=None,
+            )
+            if audio is not None:
+                audio_list.append(audio)
+
+        if not audio_list:
             raise HTTPException(status_code=500, detail="所有配音生成失败")
-        
+
         if request.return_raw:
-            merged = _merge_audio_arrays(valid_audios, 24000)
+            merged = _merge_audio_arrays(audio_list, 24000, request.silence_duration)
             if merged is not None:
                 return Response(content=audio_to_wav_bytes(merged, 24000), media_type="audio/wav")
 
         # 合并保存
         output_path = OUTPUT_DIR / f"{request.output_filename}.wav"
-        merge_audio_list(valid_audios, output_path, verbose=False)
+        merge_audio_list(audio_list, output_path, silence_duration=request.silence_duration, verbose=False)
         
         return {
             "success": True,
             "total_items": len(request.items),
-            "generated": len(valid_audios),
+            "generated": len(audio_list),
             "audio_url": f"/output/{request.output_filename}.wav",
             "filename": f"{request.output_filename}.wav",
         }

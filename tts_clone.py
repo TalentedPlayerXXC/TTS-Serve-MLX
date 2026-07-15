@@ -410,6 +410,7 @@ class TTSClone:
         import gc
         gc.collect()
         import mlx.core as mx
+        mx.set_cache_limit(0)
         mx.clear_cache()
 
     @staticmethod

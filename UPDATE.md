@@ -26,7 +26,25 @@
 
 - **`load_qwen3()` 改为先加载后赋值** — 模型加载失败时不再错误赋值全局变量，下次可重试
 - **`load_vox()` 同理** — 同一个修复模式
-- **`_download_tasks` 自动清理** — 下载完成/失败 5 分钟后自动清理 entry，防止慢泄漏
+- **`_download_tasks` 自动清理** — 下载完成/失败 30 秒后自动清理 entry，防止慢泄漏
+
+### 🧠 加载新模型前自动卸载旧模型
+
+- **`/model/load` 改为先卸再载** — 加载 TTS 前自动卸载 VoxCPM2，加载 VoxCPM2 前自动卸载 TTS
+- 防止两个模型共存 GPU 导致内存爆炸（之前切换 VoxCPM2 能冲到 7GB+）
+
+### 🧹 GPU 内存彻底释放
+
+- **`mx.set_cache_limit(0)` + `mx.clear_cache()`** — 卸载模型时禁用 MLX 缓存，强制释放 Metal 缓冲区
+- 之前只调 `clear_cache()`，MLX 把缓冲区留在池子里不还，反复切换模型导致 Metal 堆碎片化膨胀到 8.3GB
+- 验证：active内存每次卸载归零，反复切换 3 次不涨
+
+### 🐛 修复批量配音 & 对话
+
+- **原生 batch 路径已冻结** — `batch_generate()` 要求 `ref_audio` + `ref_text` 必须同时传，Speaker 模式走这条路直接抛异常，已加条件拦截
+- **`/dialogue` 重写** — 干掉 `TTSClone.batch_generate()` 包装层，改为逐条直接调 `generate()`，解决第二次请求卡死
+- **预校验路径** — dialogue 现在和 batch-clone 一样先检查所有音频路径再生成
+- **新增 `silence_duration` 参数** — 默认 0.3s，对话段落间可自定义间隔
 
 ---
 
