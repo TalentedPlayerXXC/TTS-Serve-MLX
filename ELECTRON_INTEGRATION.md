@@ -84,10 +84,9 @@ async function downloadModel(
   const modelDir = path.join(serverCwd, 'models', modelKey);
   fs.mkdirSync(modelDir, { recursive: true });
 
-  // 以魔搭为例：需要下载的 .safetensors 文件列表
-  const files = modelKey === 'qwen3-tts'
-    ? ['model.safetensors', 'speech_tokenizer/model.safetensors']
-    : ['model.safetensors'];
+  // 从 API 拿文件列表，不硬编码
+  const modelInfo = allInfo[modelKey];
+  const files = modelInfo?.files ?? ['model.safetensors'];
 
   for (const file of files) {
     const url = `${model.sources[source]}/resolve/main/${file}`;
@@ -118,14 +117,14 @@ async function startApp() {
 
   const models = await checkModels();
 
-  if (!models['qwen3-tts'].downloaded) {
-    await downloadModel('qwen3-tts', 'modelscope', (loaded, total) => {
+  if (!models['qwenTTS_0.6B_MLX'].downloaded) {
+    await downloadModel('qwenTTS_0.6B_MLX', 'modelscope', (loaded, total) => {
       console.log(`Qwen3-TTS: ${(loaded / 1024 / 1024).toFixed(0)}MB / ${(total / 1024 / 1024).toFixed(0)}MB`);
     });
   }
 
-  if (!models['voxcpm2'].downloaded) {
-    await downloadModel('voxcpm2', 'modelscope', (loaded, total) => {
+  if (!models['voxCPM2_4bit_MLX'].downloaded) {
+    await downloadModel('voxCPM2_4bit_MLX', 'modelscope', (loaded, total) => {
       console.log(`VoxCPM2: ${(loaded / 1024 / 1024).toFixed(0)}MB / ${(total / 1024 / 1024).toFixed(0)}MB`);
     });
   }

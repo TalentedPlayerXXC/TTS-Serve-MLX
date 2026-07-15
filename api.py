@@ -314,21 +314,42 @@ async def model_unload(request: ModelUnloadRequest = None):
 # ============================================================
 
 _MODEL_SOURCES = {
-    "qwen3-tts": {
+    "qwenTTS_0.6B_MLX": {
         "name": "Qwen3-TTS 0.6B (4-bit)",
         "model_id": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
-        "path": TTS_MODEL_PATH,
         "size_gb": 1.6,
+        "files": [
+            "model.safetensors",
+            "model.safetensors.index.json",
+            "config.json",
+            "configuration.json",
+            "generation_config.json",
+            "tokenizer_config.json",
+            "vocab.json",
+            "merges.txt",
+            "preprocessor_config.json",
+            "speech_tokenizer/model.safetensors",
+            "speech_tokenizer/config.json",
+            "speech_tokenizer/configuration.json",
+            "speech_tokenizer/preprocessor_config.json",
+        ],
         "sources": {
             "huggingface": "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
             "modelscope": "https://modelscope.cn/aufklarer/Qwen3-TTS-12Hz-0.6B-Base-MLX-4bit",
         },
     },
-    "voxcpm2": {
+    "voxCPM2_4bit_MLX": {
         "name": "VoxCPM2 2B (4-bit)",
         "model_id": "mlx-community/VoxCPM2-4bit",
-        "path": VOX_MODEL_PATH,
         "size_gb": 2.1,
+        "files": [
+            "model.safetensors",
+            "config.json",
+            "configuration.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "special_tokens_map.json",
+        ],
         "sources": {
             "huggingface": "https://huggingface.co/mlx-community/VoxCPM2-4bit",
             "modelscope": "https://modelscope.cn/aufklarer/VoxCPM2-MLX-int4",
@@ -342,7 +363,7 @@ async def models_info():
     """返回模型下载信息和状态"""
     result = {}
     for key, info in _MODEL_SOURCES.items():
-        model_dir = Path(info["path"])
+        model_dir = MODELS_DIR / key
         downloaded = model_dir.exists() and any(
             f.suffix == ".safetensors" for f in model_dir.iterdir()
         )
@@ -350,6 +371,7 @@ async def models_info():
             "name": info["name"],
             "downloaded": downloaded,
             "size_gb": info["size_gb"],
+            "files": info["files"],
             "sources": info["sources"],
         }
     return result
