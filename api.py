@@ -3,11 +3,12 @@
 
 import os
 import uuid
+import asyncio
 import threading
 import logging
 import time
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Depends
@@ -31,7 +32,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 # 模型路径
 MODELS_DIR = Path(os.environ.get("TTS_SERVE_MODELS_DIR", "./models"))
 TTS_MODEL_PATH = str(MODELS_DIR / "qwenTTS_0.6B_MLX")
-ASR_MODEL_PATH = str(MODELS_DIR / "whisper_asr_MLX")
 VOX_MODEL_PATH = str(MODELS_DIR / "voxCPM2_4bit_MLX")
 
 OUTPUT_DIR = Path("./api_output")
@@ -226,6 +226,12 @@ class CleanupRequest(BaseModel):
     max_size_mb: Optional[float] = Field(None, ge=1, le=100000)
 
 
+class ModelDownloadRequest(BaseModel):
+    """模型下载请求"""
+    model: str = Field(..., pattern="^(qwenTTS_0.6B_MLX|voxCPM2_4bit_MLX)$")
+    source: str = Field("modelscope", pattern="^(modelscope|huggingface)$")
+
+
 class VoxCloneRequest(BaseModel):
     """VoxCPM2 声音克隆请求"""
     text: str = Field(..., min_length=1, max_length=5000)
@@ -335,7 +341,7 @@ _MODEL_SOURCES = {
         ],
         "sources": {
             "huggingface": "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
-            "modelscope": "https://modelscope.cn/aufklarer/Qwen3-TTS-12Hz-0.6B-Base-MLX-4bit",
+            "modelscope": "https://modelscope.cn/models/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
         },
     },
     "voxCPM2_4bit_MLX": {
@@ -352,7 +358,7 @@ _MODEL_SOURCES = {
         ],
         "sources": {
             "huggingface": "https://huggingface.co/mlx-community/VoxCPM2-4bit",
-            "modelscope": "https://modelscope.cn/aufklarer/VoxCPM2-MLX-int4",
+            "modelscope": "https://modelscope.cn/models/mlx-community/VoxCPM2-4bit",
         },
     },
 }
@@ -375,6 +381,95 @@ async def models_info():
             "sources": info["sources"],
         }
     return result
+
+
+# ============================================================
+# 模型下载
+# ============================================================
+
+_download_tasks: Dict[str, dict] = {}  # model_key → {status, progress, message}
+
+
+async def _run_download(model_key: str, source: str):
+    """后台下载模型（在独立线程中运行）"""
+    info = _MODEL_SOURCES.get(model_key)
+    if not info:
+        _download_tasks[model_key] = {"status": "error", "progress": 0, "message": "未知模型"}
+        return
+
+    target_dir = MODELS_DIR / model_key
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    _download_tasks[model_key] = {"status": "downloading", "progress": 0, "message": "准备下载..."}
+
+    try:
+        import subprocess, re, threading
+
+        if source == "modelscope":
+            cmd = ["modelscope", "download", "--model", info["model_id"],
+                   "--local_dir", str(target_dir)]
+        else:
+            cmd = ["huggingface-cli", "download", info["model_id"],
+                   "--local-dir", str(target_dir)]
+
+        def _do_download():
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            # 从 stderr 解析进度（modelscope/hf-cli 的进度条输出在 stderr）
+            pattern = re.compile(r"(\d+)%")
+            for line in proc.stderr:
+                line = line.strip()
+                m = pattern.search(line)
+                if m:
+                    _download_tasks[model_key] = {
+                        "status": "downloading",
+                        "progress": int(m.group(1)),
+                        "message": line[:80],
+                    }
+            proc.wait()
+            if proc.returncode == 0:
+                _download_tasks[model_key] = {"status": "completed", "progress": 100, "message": "下载完成"}
+            else:
+                stderr = proc.stderr.read() if proc.stderr else ""
+                _download_tasks[model_key] = {"status": "error", "progress": 0, "message": stderr[:200]}
+
+        thread = threading.Thread(target=_do_download, daemon=True)
+        thread.start()
+
+    except Exception as e:
+        _download_tasks[model_key] = {"status": "error", "progress": 0, "message": str(e)}
+
+
+@app.post("/model/download")
+async def model_download(request: ModelDownloadRequest):
+    """下载模型（异步启动，通过 GET /model/download/status/{model} 查进度）"""
+    info = _MODEL_SOURCES.get(request.model)
+    if info is None:
+        raise HTTPException(status_code=400, detail=f"未知模型: {request.model}")
+
+    target_dir = MODELS_DIR / request.model
+    if target_dir.exists() and any(f.suffix == ".safetensors" for f in target_dir.iterdir()):
+        return {"success": True, "model": request.model, "action": "already_downloaded"}
+
+    # 检查是否已在下载
+    if request.model in _download_tasks:
+        task = _download_tasks[request.model]
+        if task["status"] == "downloading":
+            return {"success": True, "model": request.model, "action": "already_downloading"}
+
+    await _run_download(request.model, request.source)
+    return {"success": True, "model": request.model, "action": "started", "status_url": f"/model/download/status/{request.model}"}
+
+
+@app.get("/model/download/status/{model_key}")
+async def model_download_status(model_key: str):
+    """查询模型下载进度"""
+    task = _download_tasks.get(model_key)
+    if not task:
+        # 检查是否已存在
+        target_dir = MODELS_DIR / model_key
+        exists = target_dir.exists() and any(f.suffix == ".safetensors" for f in target_dir.iterdir())
+        return {"model": model_key, "status": "completed" if exists else "not_started", "progress": 100 if exists else 0}
+    return {"model": model_key, **task}
 
 
 # ============================================================

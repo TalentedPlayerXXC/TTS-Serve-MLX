@@ -94,6 +94,7 @@ python3 server_main.py
 | `GET` | `/model/status` | 醒了没？简洁版 |
 | `POST` | `/model/load` | 喊起床：`tts`（Speaker）、`voxcpm2`（情感） |
 | `POST` | `/model/unload` | 让模型回去睡，省内存 |
+| `POST` | `/model/download` | 📥 一键下载模型，后端 `git clone`，魔搭优先 |
 | `POST` | `/clone` | 🎭 语音克隆 — Speaker 模式速通，传 ref_text 可切 ICL |
 | `POST` | `/batch-clone` | 📦 批量配音 — 一次塞 N 段，可选合并 |
 | `POST` | `/dialogue` | 💬 对话 — 多角色唠嗑，自动拼接 |

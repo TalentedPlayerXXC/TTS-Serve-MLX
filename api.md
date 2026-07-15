@@ -526,7 +526,7 @@ GET /models-info
     "files": ["model.safetensors", "config.json", ...],
     "sources": {
       "huggingface": "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
-      "modelscope": "https://modelscope.cn/aufklarer/Qwen3-TTS-12Hz-0.6B-Base-MLX-4bit"
+      "modelscope": "https://modelscope.cn/models/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit"
     }
   },
   "voxCPM2_4bit_MLX": {
@@ -536,7 +536,7 @@ GET /models-info
     "files": ["model.safetensors", "config.json", ...],
     "sources": {
       "huggingface": "https://huggingface.co/mlx-community/VoxCPM2-4bit",
-      "modelscope": "https://modelscope.cn/aufklarer/VoxCPM2-MLX-int4"
+      "modelscope": "https://modelscope.cn/models/mlx-community/VoxCPM2-4bit"
     }
   }
 }
@@ -546,6 +546,66 @@ GET /models-info
 > `files` 列出所有需要下载的文件，照着下就行。
 > 国内优先用 `modelscope` 源，无需代理。
 
+### 8.2 下载模型
+
+```
+POST /model/download
+```
+
+后端通过 `modelscope download` 或 `huggingface-cli download` 下载模型，异步启动，通过 8.3 查询进度。
+
+**Request Body:**
+```json
+{
+  "model": "qwenTTS_0.6B_MLX",
+  "source": "modelscope"
+}
+```
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `model` | string | 是 | - | `qwenTTS_0.6B_MLX` 或 `voxCPM2_4bit_MLX` |
+| `source` | string | 否 | `modelscope` | `modelscope`（无需代理）或 `huggingface` |
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "model": "qwenTTS_0.6B_MLX",
+  "action": "started",
+  "status_url": "/model/download/status/qwenTTS_0.6B_MLX"
+}
+```
+
+> 已下载的模型直接返回 `action: "already_downloaded"`，不会重复下载。
+
+### 8.3 查询下载进度
+
+```
+GET /model/download/status/{model}
+```
+
+轮询此接口获取下载进度。
+
+**Response (200):**
+```json
+{
+  "model": "qwenTTS_0.6B_MLX",
+  "status": "downloading",
+  "progress": 45,
+  "message": "Downloading [model.safetensors]: 45%|█████"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `model` | string | 模型 key |
+| `status` | string | `downloading` / `completed` / `error` / `not_started` |
+| `progress` | int | 0-100 |
+| `message` | string | 当前状态描述 |
+
+> 下载完后直接 `POST /model/load {"model": "tts"}` 即可使用。
+
 ---
 
 ## 9. 错误码
@@ -553,10 +613,10 @@ GET /models-info
 | 状态码 | 含义 | 说明 |
 |--------|------|------|
 | 200 | OK | 请求成功 |
-| 400 | Bad Request | 参数校验失败（如参考音频不存在、文本为空、列表为空） |
+| 400 | Bad Request | 参数校验失败 |
 | 404 | Not Found | 请求的文件不存在 |
-| 500 | Internal Server Error | 服务端处理异常（生成失败、模型推理错误） |
-| 503 | Service Unavailable | 模型未加载，需先调用 `/model/load` |
+| 500 | Internal Server Error | 服务端处理异常 |
+| 503 | Service Unavailable | 模型未加载 |
 
 **错误响应格式:**
 ```json

@@ -10,6 +10,18 @@
 - **新增 `files` 字段** — 每个模型列出所有需下载的文件，版本更新也不怕
 - **Electron 集成指南同步** — 下载函数改为从 API 拿文件列表，不再硬编码
 
+### 📥 后端一键下载
+
+- **新增 `POST /model/download`** — 后端通过 `modelscope download` 或 `huggingface-cli` 直接下载模型
+- **新增 `GET /model/download/status/{model}`** — 轮询进度接口，实时显示下载百分比
+- **魔搭优先** — 默认走魔搭源，国内无需代理
+- **后台异步下载** — POST 立即返回，前端轮询进度，不阻塞
+- **自动跳过已下载** — 已下载的模型直接返回 `already_downloaded`，不会重复下载
+- **同步清理** — 删除 `api.py` 中不再使用的 `ASR_MODEL_PATH`
+- **修正魔搭地址** — Qwen3-TTS: `mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit`，VoxCPM2: `mlx-community/VoxCPM2-4bit`
+
+> 方案转变：原先设计由 **Electron 前端** HTTP 流式下载，改为**后端**一行 `modelscope download` 搞定。
+
 ---
 
 ## 2026-07-14 — 🗑️ 送走 STT + ⚡ 批量配音优化

@@ -118,7 +118,7 @@ cat > "$MODELS_OUT/qwenTTS_0.6B_MLX/README.txt" << 'README'
 
 下载:
   HF:          huggingface-cli download mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit --local-dir ./models/qwenTTS_0.6B_MLX
-  魔搭(无需代理): git clone https://www.modelscope.cn/aufklarer/Qwen3-TTS-12Hz-0.6B-Base-MLX-4bit.git ./models/qwenTTS_0.6B_MLX
+  魔搭:        modelscope download --model mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit --local_dir ./models/qwenTTS_0.6B_MLX
 README
 
 cat > "$MODELS_OUT/voxCPM2_4bit_MLX/README.txt" << 'README'
@@ -133,7 +133,7 @@ cat > "$MODELS_OUT/voxCPM2_4bit_MLX/README.txt" << 'README'
 
 下载:
   HF:          huggingface-cli download mlx-community/VoxCPM2-4bit --local-dir ./models/voxCPM2_4bit_MLX
-  魔搭(无需代理): git clone https://www.modelscope.cn/aufklarer/VoxCPM2-MLX-int4.git ./models/voxCPM2_4bit_MLX
+  魔搭:        modelscope download --model mlx-community/VoxCPM2-4bit --local_dir ./models/voxCPM2_4bit_MLX
 README
 
 echo ""

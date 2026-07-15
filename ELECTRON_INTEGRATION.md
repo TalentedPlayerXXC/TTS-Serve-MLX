@@ -46,94 +46,60 @@ your-electron-app/
 
 ## 2. 模型下载（推荐方案）
 
-服务启动后，先调 `GET /models-info` 获取模型信息和下载状态，再用 HTTP 从魔搭下载缺少的模型文件，下载完成后加载模型。
+服务启动后，调 `POST /model/download` 一键下载模型，后端自己 `git clone` 完事，前端只管等结果。
 
 ```typescript
-/**
- * 模型下载信息接口
- */
-interface ModelInfo {
-  name: string;
-  downloaded: boolean;
-  size_gb: number;
-  sources: {
-    huggingface: string;
-    modelscope: string;   // 国内优先
-  };
-}
-
-/** 第一步：查询模型状态 */
-async function checkModels(): Promise<Record<string, ModelInfo>> {
-  const res = await fetch(`http://${SERVER_HOST}:${SERVER_PORT}/models-info`);
-  return res.json();
-}
-
-/** 第二步：下载模型文件（魔搭优先）
- *  魔搭仓库本质上是 git 仓库，可用 git clone 或 HTTP 下载 .safetensors 文件
- */
-async function downloadModel(
-  modelKey: string,
-  source: 'modelscope' | 'huggingface' = 'modelscope',
-  onProgress?: (loaded: number, total: number) => void,
-): Promise<void> {
-  const infoRes = await fetch(`http://${SERVER_HOST}:${SERVER_PORT}/models-info`);
-  const allInfo = await infoRes.json();
-  const model = allInfo[modelKey];
-  if (!model || model.downloaded) return;
-
-  const modelDir = path.join(serverCwd, 'models', modelKey);
-  fs.mkdirSync(modelDir, { recursive: true });
-
-  // 从 API 拿文件列表，不硬编码
-  const modelInfo = allInfo[modelKey];
-  const files = modelInfo?.files ?? ['model.safetensors'];
-
-  for (const file of files) {
-    const url = `${model.sources[source]}/resolve/main/${file}`;
-    const dest = path.join(modelDir, file);
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-
-    // HTTP 流式下载 + 进度回调
-    const response = await fetch(url);
-    const contentLength = Number(response.headers.get('content-length'));
-    const reader = response.body!.getReader();
-    const writer = fs.createWriteStream(dest);
-    let received = 0;
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      received += value.length;
-      writer.write(value);
-      onProgress?.(received, contentLength);
-    }
-    writer.end();
+/** 一键下载模型，带进度反馈 */
+async function downloadModel(modelKey: string): Promise<boolean> {
+  // 1. 发起下载
+  const startRes = await fetch(`http://${SERVER_HOST}:${SERVER_PORT}/model/download`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: modelKey, source: 'modelscope' }),
+  });
+  const startData = await startRes.json();
+  if (!startRes.ok || startData.action === 'already_downloaded') {
+    return startRes.ok;
   }
+
+  // 2. 轮询下载进度
+  return new Promise((resolve) => {
+    const interval = setInterval(async () => {
+      const statusRes = await fetch(
+        `http://${SERVER_HOST}:${SERVER_PORT}/model/download/status/${modelKey}`
+      );
+      const status = await statusRes.json();
+      console.log(`[TTS] ${modelKey}: ${status.progress}% - ${status.message}`);
+
+      if (status.status === 'completed') {
+        clearInterval(interval);
+        resolve(true);
+      } else if (status.status === 'error') {
+        clearInterval(interval);
+        resolve(false);
+      }
+    }, 2000);
+  });
 }
 
 // ---- 完整启动流程 ----
 async function startApp() {
-  await startTTSServer();  // 启动 Python 服务
+  await startTTSServer();
 
-  const models = await checkModels();
+  const dl1 = downloadModel('qwenTTS_0.6B_MLX');
+  // 显示 "Qwen3-TTS: 45% - Downloading [model.safetensors]: 45%|█████"
 
-  if (!models['qwenTTS_0.6B_MLX'].downloaded) {
-    await downloadModel('qwenTTS_0.6B_MLX', 'modelscope', (loaded, total) => {
-      console.log(`Qwen3-TTS: ${(loaded / 1024 / 1024).toFixed(0)}MB / ${(total / 1024 / 1024).toFixed(0)}MB`);
-    });
-  }
+  const dl2 = downloadModel('voxCPM2_4bit_MLX');
 
-  if (!models['voxCPM2_4bit_MLX'].downloaded) {
-    await downloadModel('voxCPM2_4bit_MLX', 'modelscope', (loaded, total) => {
-      console.log(`VoxCPM2: ${(loaded / 1024 / 1024).toFixed(0)}MB / ${(total / 1024 / 1024).toFixed(0)}MB`);
-    });
-  }
-
-  // 加载模型
+  await Promise.all([dl1, dl2]);
   await loadModel('tts');
   createWindow();
 }
 ```
+
+> 魔搭源优先（`source: 'modelscope'`），国内无需代理。
+> 下载完成后模型自动放在正确位置，直接 `POST /model/load` 即可使用。
+> 已下载的模型会跳过，不会重复下载。
 
 ## 3. Electron 主进程代码 (main.ts)
 ```typescript
