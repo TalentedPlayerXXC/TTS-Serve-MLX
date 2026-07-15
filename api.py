@@ -70,8 +70,9 @@ def load_qwen3():
             return
 
         logger.info("加载 Qwen3 TTS 模型: %s", TTS_MODEL_PATH)
-        _qwen_tts = TTSClone(model_path=TTS_MODEL_PATH)
-        _ = _qwen_tts.model
+        instance = TTSClone(model_path=TTS_MODEL_PATH)
+        _ = instance.model  # 触发热加载，失败时抛异常，_qwen_tts 不会被错误赋值
+        _qwen_tts = instance
         logger.info("Qwen3 TTS 模型加载完成")
 
 
@@ -96,7 +97,8 @@ def load_vox():
             return
         logger.info("加载 VoxCPM2 模型: %s", VOX_MODEL_PATH)
         from mlx_audio.tts.utils import load_model
-        _vox = load_model(VOX_MODEL_PATH)
+        instance = load_model(VOX_MODEL_PATH)
+        _vox = instance
         logger.info("VoxCPM2 模型加载完成")
 
 
@@ -431,6 +433,8 @@ async def _run_download(model_key: str, source: str):
             else:
                 stderr = proc.stderr.read() if proc.stderr else ""
                 _download_tasks[model_key] = {"status": "error", "progress": 0, "message": stderr[:200]}
+            # 保留 30 秒给前端轮询确认，之后自动清理
+            threading.Timer(30, lambda: _download_tasks.pop(model_key, None)).start()
 
         thread = threading.Thread(target=_do_download, daemon=True)
         thread.start()
