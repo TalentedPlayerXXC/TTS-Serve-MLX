@@ -28,7 +28,8 @@
 5. [VoxCPM2 生成](#5-voxcpm2-生成)
 6. [文件管理](#6-文件管理)
 7. [缓存管理](#7-缓存管理)
-8. [错误码](#8-错误码)
+8. [模型下载信息](#8-模型下载信息)
+9. [错误码](#9-错误码)
 
 ---
 
@@ -505,7 +506,49 @@ POST /cleanup
 
 ---
 
-## 8. 错误码
+## 8. 模型下载信息
+
+### 8.1 查看模型下载状态
+
+```
+GET /models-info
+```
+
+返回每个模型的文件清单、下载来源、是否已下载。
+
+**Response (200):**
+```json
+{
+  "qwenTTS_0.6B_MLX": {
+    "name": "Qwen3-TTS 0.6B (4-bit)",
+    "downloaded": true,
+    "size_gb": 1.6,
+    "files": ["model.safetensors", "config.json", ...],
+    "sources": {
+      "huggingface": "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
+      "modelscope": "https://modelscope.cn/aufklarer/Qwen3-TTS-12Hz-0.6B-Base-MLX-4bit"
+    }
+  },
+  "voxCPM2_4bit_MLX": {
+    "name": "VoxCPM2 2B (4-bit)",
+    "downloaded": false,
+    "size_gb": 2.1,
+    "files": ["model.safetensors", "config.json", ...],
+    "sources": {
+      "huggingface": "https://huggingface.co/mlx-community/VoxCPM2-4bit",
+      "modelscope": "https://modelscope.cn/aufklarer/VoxCPM2-MLX-int4"
+    }
+  }
+}
+```
+
+> `key` 就是文件夹名，前端直接拿去用，不需要映射表。
+> `files` 列出所有需要下载的文件，照着下就行。
+> 国内优先用 `modelscope` 源，无需代理。
+
+---
+
+## 9. 错误码
 
 | 状态码 | 含义 | 说明 |
 |--------|------|------|
