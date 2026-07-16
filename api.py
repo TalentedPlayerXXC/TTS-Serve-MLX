@@ -405,39 +405,81 @@ async def _run_download(model_key: str, source: str):
     target_dir = MODELS_DIR / model_key
     target_dir.mkdir(parents=True, exist_ok=True)
 
+    files = info["files"]
     _download_tasks[model_key] = {"status": "downloading", "progress": 0, "message": "准备下载..."}
 
     try:
-        import subprocess, re, threading
+        import threading, urllib.request, shutil
+        from pathlib import Path
 
         if source == "modelscope":
-            cmd = ["modelscope", "download", "--model", info["model_id"],
-                   "--local_dir", str(target_dir)]
+            base_url = f"https://modelscope.cn/models/{info['model_id']}/resolve/main"
         else:
-            cmd = ["huggingface-cli", "download", info["model_id"],
-                   "--local-dir", str(target_dir)]
+            base_url = f"https://huggingface.co/{info['model_id']}/resolve/main"
 
         def _do_download():
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            # 从 stderr 解析进度（modelscope/hf-cli 的进度条输出在 stderr）
-            pattern = re.compile(r"(\d+)%")
-            for line in proc.stderr:
-                line = line.strip()
-                m = pattern.search(line)
-                if m:
+            try:
+                total_files = len(files)
+                # 预先获取各文件大小，用于加权进度
+                file_sizes = [0] * total_files
+                downloaded_sizes = [0] * total_files
+
+                for idx, filename in enumerate(files):
+                    file_url = f"{base_url}/{filename}"
+                    file_path = target_dir / filename
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+                    # 跳过已存在的文件
+                    if file_path.exists() and file_path.stat().st_size > 1024:
+                        continue
+
                     _download_tasks[model_key] = {
                         "status": "downloading",
-                        "progress": int(m.group(1)),
-                        "message": line[:80],
+                        "progress": 0,
+                        "message": f"下载 {filename} ({idx+1}/{total_files})",
                     }
-            proc.wait()
-            if proc.returncode == 0:
-                _download_tasks[model_key] = {"status": "completed", "progress": 100, "message": "下载完成"}
-            else:
-                stderr = proc.stderr.read() if proc.stderr else ""
-                _download_tasks[model_key] = {"status": "error", "progress": 0, "message": stderr[:200]}
-            # 保留 30 秒给前端轮询确认，之后自动清理
-            threading.Timer(30, lambda: _download_tasks.pop(model_key, None)).start()
+
+                    # 流式下载
+                    req = urllib.request.Request(file_url, headers={
+                        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+                    })
+                    with urllib.request.urlopen(req, timeout=600) as resp:
+                        total = int(resp.headers.get("content-length", 0))
+                        file_sizes[idx] = total
+                        downloaded_bytes = 0
+                        chunk_size = 8192 * 1024  # 8MB 块
+                        with open(file_path, "wb") as f:
+                            while True:
+                                chunk = resp.read(chunk_size)
+                                if not chunk:
+                                    break
+                                f.write(chunk)
+                                downloaded_bytes += len(chunk)
+                                downloaded_sizes[idx] = downloaded_bytes
+
+                                # 按字节加权计算整体进度
+                                total_bytes = sum(file_sizes)
+                                total_downloaded = sum(downloaded_sizes)
+                                if total_bytes > 0:
+                                    overall = int((total_downloaded / total_bytes) * 100)
+                                    file_pct = int((downloaded_bytes / total) * 100) if total > 0 else 0
+                                    _download_tasks[model_key] = {
+                                        "status": "downloading",
+                                        "progress": min(overall, 99),
+                                        "message": f"{filename} {file_pct}%",
+                                    }
+
+                _download_tasks[model_key] = {
+                    "status": "completed", "progress": 100, "message": "下载完成"
+                }
+
+            except Exception as e:
+                _download_tasks[model_key] = {
+                    "status": "error", "progress": 0,
+                    "message": f"下载异常: {str(e)[:200]}"
+                }
+            finally:
+                threading.Timer(30, lambda: _download_tasks.pop(model_key, None)).start()
 
         thread = threading.Thread(target=_do_download, daemon=True)
         thread.start()

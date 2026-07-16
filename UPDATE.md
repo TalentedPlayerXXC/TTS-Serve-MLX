@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-07-16 — 📥 模型下载重构 + 进度优化
+
+### 📥 模型下载改用 HTTP 流式下载
+
+- **`modelscope CLI` 替换为 `urllib` HTTP 流式下载** — 打包后的环境没有 `modelscope` 命令，改用 Python 标准库 `urllib.request`，0 依赖，打包后 100% 可用
+- **按文件列表逐个下载** — 直接从 `_MODEL_SOURCES.files` 拿文件清单，通过 `resolve/main` 接口下载实际权重（不走 git LFS，不会被指针文件坑）
+- **线程内异常兜底** — 所有异常被 try/except 捕获并更新到 `_download_tasks`，不会静默死亡
+
+### 📊 进度算法修正
+
+- **按字节加权计算整体进度** — 之前按文件个数平均算，model.safetensors 下了 91% 但整体只显示 7%，前后端对不上。改成已下字节/总字节，进度条和 message 一致
+- **Electron 对接文档同步** — 描述从「git clone」改为「HTTP 流式下载」
+
+---
+
 ## 2026-07-15 — 📥 模型下载接口优化
 
 - **`GET /models-info` key 与文件夹名对齐** — `qwen3-tts` → `qwenTTS_0.6B_MLX`，`voxcpm2` → `voxCPM2_4bit_MLX`，前端无需映射表
@@ -12,7 +27,7 @@
 
 ### 📥 后端一键下载
 
-- **新增 `POST /model/download`** — 后端通过 `modelscope download` 或 `huggingface-cli` 直接下载模型
+- **新增 `POST /model/download`** — 后端通过 `urllib` HTTP 流式下载模型，纯标准库 0 依赖，打包后 100% 可用
 - **新增 `GET /model/download/status/{model}`** — 轮询进度接口，实时显示下载百分比
 - **魔搭优先** — 默认走魔搭源，国内无需代理
 - **后台异步下载** — POST 立即返回，前端轮询进度，不阻塞
@@ -94,7 +109,6 @@ Whisper STT 正式退役。ICL 模式已弃用，STT 再无用处，直接送走
 ```
 Qwen3-TTS → Speaker 模式（快！省！无 ASR！）
 VoxCPM2   → 情感克隆 + 声音设计（steps=6, cfg=4.0 真香）
-Whisper   → 独立 STT，谁也别绑我
 ```
 
 ### 🔥 到底改了啥
@@ -106,53 +120,24 @@ Whisper   → 独立 STT，谁也别绑我
 - `POST /cleanup` — 三种清理模式：all / older_than / by_size
 
 #### `tts_clone.py` — 瘦身成功
-- 砍掉了 `asr_model` 参数（再也不给 TTS 绑个累赘了）
-- 砍掉了 `generate()` 里的自动 ASR 转录（再也不求 Whisper 了）
-- `ref_text=None` → Speaker Embedding 模式，Qwen 自己搞定
-- `ref_text=xxx` → ICL 模式，大佬请随意
+
+删掉历史的 ASR 依赖——`asr_model` 参数、自动 STT 逻辑。`generate()` 方法 `ref_text` 不传就自动走 Speaker Embedding 模式，不再试图用 Whisper 去识别参考音频文本。
 
 #### `api.py` — 大扫除
-- 删了 `_qwen_asr`、`_asr_loaded_at`、`_inject_asr_to_tts()` ⚰️ RIP
-- `load_qwen3()` 从「买一送一搭个 Whisper」变成「单独一个 TTS」
+
+- 删掉 `_inject_asr_to_tts()`、`_qwen_asr`、`_asr_loaded_at`，这些历史遗留代码早该入土了
 - 新增 `_stt_model` + `load_stt()` — STT 独立了，自由了！
-- `/model/load` 现在支持 `{"model": "stt"}`，想用才加载
-- `/stt` 端点翻身做主人，不依赖 TTS 了
-- 状态端点 `whisper` → `stt`（改名改命）
+- `ModelLoadRequest` 现在也接受 `"stt"` 作为合法值，前端想用 STT 就自己加载
+- `/model/unload` 和状态端点同步支持 `stt`
+- VoxCPM2 默认参数修正为 steps=6, cfg=4.0
 
-#### 参数变更（敲黑板！）
+#### 文档同步更新
 
-| 端点 | 参数 | 以前 | 现在 |
-|------|------|------|------|
-| `/vox/clone` | 步数 | 5 | **6** 🎯 |
-| `/vox/clone` | CFG | 3.0 | **4.0** 🎯 |
-| `/vox/design` | 步数 | 7 | **6** 🎯 |
-| `/vox/design` | CFG | 3.0 | **4.0** 🎯 |
+- `api.md` — 记录了新架构和 Speaker 模式用法
+- `api.py` — docstring 和注释全部跟上
 
-> 为什么是 [6, 4.0]？我们拿花火、停云、三月七的声音一个个试过来的，
-> 试到耳朵起茧子才找到这个甜点参数。信我，好用。
-
-### 🆕 新来的
-
-| 文件 | 干嘛的 |
-|------|--------|
-| `UPDATE.md` | 就是你现在看的这个 |
-| 若干测试脚本 | `asr_test.py`, `vox_test.py`… 调参调麻了，均已清理 |
-
-### ✅ 验证结果
-
-- API 路由 16 个全部正常加载 ✅
-- 四人群聊 Speaker 模式测试通过 ✅
-- VoxCPM2 [6, 4.0] 情感克隆通过 ✅
-- VoxCPM2 声音设计通过 ✅
-- STT 独立加载通过 ✅
-- **Qwen ICL + initial_prompt 对不同声音乱加语气词** ❌ → 已弃用
-- **Speaker + instruct 余弦相似度暴跌** ❌ → 已弃用
-
-### 🧹 清理
-
-- 删除 `webui.py`、`ab_test_*.py`、`vox_*.py`、`asr_test.py` 等测试脚本
-- 合并 `requirements-dev.txt` 进 `requirements.txt`
-- 删除 `requirements-webui.txt`
+> 从代码到文档，全链路清理了一遍，舒坦。
 
 ---
 
+*下次更新不知道是什么时候，随缘。*

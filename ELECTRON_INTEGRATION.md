@@ -46,7 +46,7 @@ your-electron-app/
 
 ## 2. 模型下载（推荐方案）
 
-服务启动后，调 `POST /model/download` 一键下载模型，后端自己 `git clone` 完事，前端只管等结果。
+服务启动后，调 `POST /model/download` 一键下载模型，后端 HTTP 流式下载，前端轮询进度。
 
 ```typescript
 /** 一键下载模型，带进度反馈 */
