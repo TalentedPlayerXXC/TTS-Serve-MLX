@@ -35,10 +35,13 @@ TTS-Serve 语音克隆模块
 
 from pathlib import Path
 from typing import Optional, List, Dict
-from dataclasses import dataclass
 import io
 import logging
+import gc
+import mlx.core as mx
 import numpy as np
+
+from mlx_audio.tts.utils import load_model
 
 logger = logging.getLogger(__name__)
 
@@ -163,14 +166,6 @@ def merge_audio_list(audio_list: List[np.ndarray], output_path: Path, sample_rat
 # TTSClone 类 - 核心封装
 # ============================================================
 
-@dataclass
-class TTSItem:
-    """配音项目数据类"""
-    text: str           # 要转换的文本
-    ref_audio: str      # 参考音频路径
-    ref_text: str       # 参考音频对应的文本
-
-
 class TTSClone:
     """
     多模型 TTS 语音克隆封装类
@@ -204,8 +199,6 @@ class TTSClone:
             model_path: 模型路径或 HuggingFace 模型 ID
             sample_rate: 音频采样率
         """
-        from mlx_audio.tts.utils import load_model
-
         self.model_path = model_path
         self.sample_rate = sample_rate
         self._model = None
@@ -213,7 +206,6 @@ class TTSClone:
     @property
     def model(self):
         if self._model is None:
-            from mlx_audio.tts.utils import load_model
             logger.info("正在加载模型: %s", self.model_path)
             self._model = load_model(self.model_path)
             logger.info("模型加载完成")
@@ -377,7 +369,7 @@ class TTSClone:
         )
     
     def generate_dialogue(self, dialogue_items: List[Dict], output_path: Optional[str] = None) -> List[np.ndarray]:
-        """
+        """(deprecated — api.py 的 /dialogue 端点已自行实现逐条循环，不再调用此方法)
         生成对话场景的配音（快捷方法）
         
         Args:
@@ -407,9 +399,7 @@ class TTSClone:
     def unload(self):
         """卸载模型，释放内存"""
         self._model = None
-        import gc
         gc.collect()
-        import mlx.core as mx
         mx.set_cache_limit(0)
         mx.clear_cache()
 

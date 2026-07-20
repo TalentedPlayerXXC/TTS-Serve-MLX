@@ -26,6 +26,9 @@ cd "$PROJECT_DIR"
 DIST_DIR="$PROJECT_DIR/dist/tts_serve_mlx"
 MODELS_OUT="$DIST_DIR/models"
 
+# 清掉 PYTHONPATH，防止混入不兼容的包（如 Hermes 3.11 的 pydantic_core）
+unset PYTHONPATH
+
 echo "========================================"
 echo " TTS-Serve-MLX 打包工具"
 echo "========================================"
@@ -44,8 +47,14 @@ echo ""
 
 # ---- 检查 libsndfile ----
 echo "[2/5] 检查 libsndfile..."
-LIBSNDFILE="/opt/homebrew/lib/libsndfile.dylib"
-if [ ! -f "$LIBSNDFILE" ]; then
+LIBSNDFILE=""
+for _lib in /opt/homebrew/lib/libsndfile.dylib /usr/local/lib/libsndfile.dylib; do
+    if [ -f "$_lib" ]; then
+        LIBSNDFILE="$_lib"
+        break
+    fi
+done
+if [ -z "$LIBSNDFILE" ]; then
     echo "[!] libsndfile 未找到，请安装: brew install libsndfile"
     exit 1
 fi
@@ -77,26 +86,13 @@ echo ""
 
 # ---- 执行 PyInstaller 打包 ----
 echo "[5/5] 开始 PyInstaller 打包..."
-echo "    模式: onedir"
+echo "    模式: onedir (通过 tts_serve_mlx.spec)"
 echo "    目标: arm64"
 echo "    注意: 模型文件不打包，用户自行复制到 dist/tts_serve_mlx/models/"
 echo ""
 
 python3 -m PyInstaller \
-  --onedir \
-  --name tts_serve_mlx \
-  --add-binary "$LIBSNDFILE:." \
-  --hidden-import "api" \
-  --hidden-import "tts_clone" \
-  --hidden-import "mlx_audio.tts.utils" \
-  --hidden-import "mlx_audio.tts.models.qwen3_tts" \
-  --hidden-import "mlx_lm" \
-  --collect-all "mlx_audio" \
-  --collect-all "mlx" \
-  --collect-all "mlx_lm" \
-  --collect-all "transformers" \
-  --target-arch arm64 \
-  server_main.py
+  tts_serve_mlx.spec
 
 echo ""
 

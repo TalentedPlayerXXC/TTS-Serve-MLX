@@ -11,14 +11,20 @@ from pathlib import Path
 from typing import Optional, List, Dict
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Depends
+from fastapi import FastAPI, HTTPException, Query, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import numpy as np
+from urllib.parse import urlparse
 
-from tts_clone import TTSClone, merge_audio_list, save_audio, audio_to_wav_bytes, _merge_audio_arrays
+import gc
+import mlx.core as mx
+from mlx_audio.tts.utils import load_model
+
+from tts_clone import TTSClone, merge_audio_list, save_audio, audio_to_wav_bytes, \
+    _merge_audio_arrays, apply_fade
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +52,12 @@ _vox = None
 
 def _validate_audio_path(audio_path: str) -> Path:
     """校验音频路径安全性，防止路径遍历"""
-    p = Path(audio_path).resolve()
     raw = Path(audio_path)
+    normed = os.path.normpath(audio_path)
+    p = Path(normed).resolve()
     if '..' in raw.parts:
         cwd = Path.cwd().resolve()
-        if not str(p).startswith(str(cwd) + os.sep):
+        if not str(p).startswith(str(cwd) + os.sep) and str(p) != str(cwd):
             raise HTTPException(status_code=400, detail="拒绝访问受保护路径之外的音频文件")
     return p
 
@@ -82,9 +89,7 @@ def unload_qwen3():
         if _qwen_tts:
             _qwen_tts.unload()
             _qwen_tts = None
-        import gc
         gc.collect()
-        import mlx.core as mx
         mx.set_cache_limit(0)
         mx.clear_cache()
         logger.info("Qwen3 TTS 模型已卸载，GPU 内存已释放")
@@ -97,7 +102,6 @@ def load_vox():
             logger.info("VoxCPM2 模型已加载，跳过")
             return
         logger.info("加载 VoxCPM2 模型: %s", VOX_MODEL_PATH)
-        from mlx_audio.tts.utils import load_model
         instance = load_model(VOX_MODEL_PATH)
         _vox = instance
         logger.info("VoxCPM2 模型加载完成")
@@ -107,9 +111,7 @@ def unload_vox():
     global _vox
     with _model_lock:
         _vox = None
-        import gc
         gc.collect()
-        import mlx.core as mx
         mx.set_cache_limit(0)
         mx.clear_cache()
         logger.info("VoxCPM2 模型已卸载，GPU 内存已释放")
@@ -173,6 +175,45 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Origin/Referer 安全检查 — 防止恶意网站绕过 CORS 调用接口吃内存
+@app.middleware("http")
+async def restrict_origin(request: Request, call_next):
+    # 放行不消耗 GPU 的路径
+    safe_prefixes = ("/health", "/docs", "/openapi.json", "/model/download/status")
+    if any(request.url.path.startswith(p) for p in safe_prefixes):
+        return await call_next(request)
+
+    # OPTIONS 预检请求放行
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    origin = request.headers.get("origin", "")
+    referer = request.headers.get("referer", "")
+
+    # 没来源 = curl / Python 脚本 / Electron 主进程，放行
+    if not origin and not referer:
+        return await call_next(request)
+
+    allowed_hosts = {"127.0.0.1", "localhost"}
+
+    for source in (origin, referer):
+        if not source:
+            continue
+        # Electron 渲染进程 file:// → Origin: null
+        if source == "null":
+            continue
+        try:
+            parsed = urlparse(source)
+            if parsed.hostname not in allowed_hosts:
+                logger.warning("拒绝非本机来源请求: origin=%s referer=%s", origin, referer)
+                return Response(status_code=403, content="拒绝非本机来源的请求")
+        except Exception:
+            return Response(status_code=400, content="无效的请求来源")
+
+    return await call_next(request)
+
 
 # 挂载静态文件目录（用于访问生成的音频）
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
@@ -296,8 +337,10 @@ async def model_status():
 async def model_load(request: ModelLoadRequest):
     try:
         if request.model == "tts":
+            unload_vox()
             load_qwen3()
         elif request.model == "voxcpm2":
+            unload_qwen3()
             load_vox()
         return {"success": True, "model": request.model, "action": "loaded"}
     except Exception as e:
@@ -409,13 +452,20 @@ async def _run_download(model_key: str, source: str):
     _download_tasks[model_key] = {"status": "downloading", "progress": 0, "message": "准备下载..."}
 
     try:
-        import threading, urllib.request, shutil
+        import threading, urllib.request, shutil, ssl
         from pathlib import Path
+
+        # 用 certifi 获取独立 CA 证书包（不依赖系统钥匙串）
+        import certifi
+        _ssl_ctx = ssl.create_default_context(cafile=certifi.where())
 
         if source == "modelscope":
             base_url = f"https://modelscope.cn/models/{info['model_id']}/resolve/main"
         else:
             base_url = f"https://huggingface.co/{info['model_id']}/resolve/main"
+
+        # 尝试带 SSL 验证，部分 macOS 系统 CA 证书不全时会降级
+        _ssl_ctx = ssl.create_default_context()
 
         def _do_download():
             try:
@@ -439,11 +489,20 @@ async def _run_download(model_key: str, source: str):
                         "message": f"下载 {filename} ({idx+1}/{total_files})",
                     }
 
-                    # 流式下载
+                    # 流式下载（带 SSL 降级兜底）
                     req = urllib.request.Request(file_url, headers={
                         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
                     })
-                    with urllib.request.urlopen(req, timeout=600) as resp:
+                    try:
+                        resp = urllib.request.urlopen(req, timeout=600, context=_ssl_ctx)
+                    except urllib.error.URLError as _ssl_err:
+                        if "CERTIFICATE_VERIFY_FAILED" in str(_ssl_err):
+                            logger.warning("SSL 证书验证失败，降级为跳过证书验证: %s", filename)
+                            _ssl_fallback = ssl._create_unverified_context()
+                            resp = urllib.request.urlopen(req, timeout=600, context=_ssl_fallback)
+                        else:
+                            raise
+                    with resp:
                         total = int(resp.headers.get("content-length", 0))
                         file_sizes[idx] = total
                         downloaded_bytes = 0
@@ -657,6 +716,7 @@ async def batch_clone(request: BatchCloneRequest):
             for idx, (i, item, _) in enumerate(valid_items):
                 if idx < len(batch_results):
                     audio = np.array(batch_results[idx].audio)
+                    audio = apply_fade(audio)
                     audio_list.append(audio)
 
                     _qwen_tts._save_audio_if_needed(audio, OUTPUT_DIR, i)
@@ -815,6 +875,7 @@ def _vox_generate_and_save(kwargs: dict) -> dict:
         raise HTTPException(status_code=500, detail="VoxCPM2 生成失败")
 
     audio = np.array(results[0].audio)
+    audio = apply_fade(audio, fade_in_samples=480, fade_out_samples=960)
     output_path = OUTPUT_DIR / f"vox_{uuid.uuid4().hex[:8]}.wav"
     save_audio(audio, output_path, sample_rate=48000, verbose=False)
 
@@ -833,7 +894,9 @@ def _vox_generate_raw(kwargs: dict) -> np.ndarray:
     results = list(_vox.generate(**kwargs))
     if not results:
         raise HTTPException(status_code=500, detail="VoxCPM2 生成失败")
-    return np.array(results[0].audio)
+    audio = np.array(results[0].audio)
+    audio = apply_fade(audio, fade_in_samples=480, fade_out_samples=960)
+    return audio
 
 
 @app.post("/vox/clone")
@@ -1021,23 +1084,17 @@ async def cleanup_cache(request: CleanupRequest):
             logger.info("缓存大小 %.1fMB 未超限 %.1fMB，无需清理",
                          total_bytes / 1024 / 1024, request.max_size_mb)
         else:
-            # 从最旧的开始删，直到低于上限
-            # all_files 已按 mtime 降序（最新在前），反过来从最后删
-            to_delete = []
-            to_keep = []
-            running_total = 0
+            # 从最旧开始删直到低于上限，保留最新文件
+            # all_files 已按 mtime 降序（最新在前）
+            running_total = sum(f.stat().st_size for f in all_files)
             for f in reversed(all_files):  # 从最旧开始
-                size = f.stat().st_size
-                if running_total + size > max_bytes:
-                    to_delete.append((f, size))
+                if running_total <= max_bytes:
+                    kept.append(f.name)
                 else:
-                    running_total += size
-                    to_keep.append(f)
-
-            for f, size in to_delete:
-                f.unlink()
-                deleted.append({"filename": f.name, "size": size})
-            kept = [f.name for f in to_keep]
+                    size = f.stat().st_size
+                    f.unlink()
+                    running_total -= size
+                    deleted.append({"filename": f.name, "size": size})
             logger.info("按大小清理: 上限 %.1fMB, 当前 %.1fMB, 删 %d 个, 留 %d 个",
                          request.max_size_mb, total_bytes / 1024 / 1024,
                          len(deleted), len(kept))
@@ -1053,26 +1110,3 @@ async def cleanup_cache(request: CleanupRequest):
         "deleted_files": [d["filename"] for d in deleted[:20]],  # 最多列20个
         "kept_files": kept[:20],
     }
-
-
-# ============================================================
-# 启动
-# ============================================================
-
-if __name__ == "__main__":
-    import uvicorn
-
-    port = int(os.environ.get("TTS_SERVE_PORT", "8000"))
-    host = os.environ.get("TTS_SERVE_HOST", "127.0.0.1")
-    log_level = os.environ.get("TTS_SERVE_LOG_LEVEL", "warning")
-
-    logger.info("=" * 60)
-    logger.info("启动 TTS-Serve API 服务（启动时不预载模型）")
-    logger.info("=" * 60)
-    logger.info("Qwen3 TTS（Speaker 模式）: %s", TTS_MODEL_PATH)
-    logger.info("VoxCPM2（情感克隆/设计）: %s", VOX_MODEL_PATH)
-    logger.info("输出目录: %s", OUTPUT_DIR)
-    logger.info("API 文档: http://%s:%d/docs", host, port)
-    logger.info("=" * 60)
-
-    uvicorn.run(app, host=host, port=port, log_level=log_level)

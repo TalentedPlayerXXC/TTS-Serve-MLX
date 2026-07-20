@@ -1,8 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 from PyInstaller.utils.hooks import collect_all
 
 datas = []
-binaries = [('/opt/homebrew/lib/libsndfile.dylib', '.')]
+# 动态查找 libsndfile（同时支持 ARM 和 Intel Homebrew）
+_libsndfile = ''
+for _lib in ('/opt/homebrew/lib/libsndfile.dylib', '/usr/local/lib/libsndfile.dylib'):
+    if os.path.exists(_lib):
+        _libsndfile = _lib
+        break
+binaries = [(_libsndfile, '.')] if _libsndfile else []
 hiddenimports = ['api', 'tts_clone', 'mlx_audio.tts.utils', 'mlx_audio.tts.models.qwen3_tts', 'mlx_lm']
 tmp_ret = collect_all('mlx_audio')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
@@ -25,7 +32,7 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
-    optimize=0,
+    optimize=2,
 )
 pyz = PYZ(a.pure)
 

@@ -97,6 +97,8 @@ result = next(model.generate(
 
 选择建议：在 Apple Silicon 上，8bit 版本是较好的平衡点。如果内存充足（>16GB）且追求质量，选 bf16。
 
+> **本项目选用 4-bit 版本**：为了在 16GB M1 上同时流畅运行 Qwen3-TTS 和 VoxCPM2，4-bit 版本（2.30 GB）的显存占用更低，切换模型时更不容易触发 Metal 内存压力。如果你的设备内存充裕（>=24GB），可自行替换为 8-bit 版本。
+
 ---
 
 ## CLI 命令行

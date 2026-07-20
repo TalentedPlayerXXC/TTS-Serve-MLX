@@ -4,7 +4,58 @@
 
 ---
 
-## 2026-07-16 — 📥 模型下载重构 + 进度优化
+## 2026-07-20 — 🧹 代码规范化 + 🔌 端口动态化 + 🛡️ 安全加固
+
+### 🛡️ 安全防护：Origin/Referer 校验中间件
+
+- **新增 `restrict_origin` 中间件** — 所有 POST/DELETE 等改状态请求，如果浏览器带了 `Origin` 或 `Referer` 但不是 localhost/127.0.0.1，直接返回 403
+- **防止恶意网站「吃内存」** — 开着 Electron 时访问恶意网页，`<form>` / `fetch` 打到后端的 `/clone`、`/batch-clone` 等推理接口会被拦截
+- **不影响正常使用** — curl / Python 脚本 / Electron 主进程不带来源头，放行；Electron 渲染进程 `file://` 带 `Origin: null`，也放行
+- **Electron 零改动** — 纯后端中间件，前端不需要改任何代码
+- **Electron 集成指南同步** — 加了安全说明章节，解释中间件的工作原理和兼容性
+
+### 🧹 代码打扫除
+
+- **内联 import 全部提到模块顶部** — `import gc`、`import mlx.core as mx`、`from mlx_audio.tts.utils import load_model` 在 api.py 和 tts_clone.py 中各出现 3-4 次重复加载，现在统一提到文件顶部，清爽了 ✨
+- **删除 `TTSItem` 死代码** — 这个数据类定义了以后从未被调用过，送走 ☠️
+- **`generate_dialogue()` 标记 deprecated** — api.py 的 `/dialogue` 端点早已自己实现逐条循环，`TTSClone` 上的这个方法不再被调用，加了个注释标明
+- **删掉 `api.py` 末尾的重复入口** — `if __name__ == "__main__"` + `uvicorn.run` 和 `server_main.py` 功能完全重复，统一走 `server_main.py`
+
+### 🔌 后端端口动态化
+
+- **端口不再写死 8000** — 没设 `TTS_SERVE_PORT` 时自动扫 8000-8050 的空闲端口，找到了就用
+- **stdout 打印 `TTS_SERVER_PORT=xxxxx`** — Electron 主进程正则解析此值，从此不担心 8000 被占瘫痪
+- **Electron 集成指南同步更新** — port 从环境变量改为 stdout 解析 + waitForPortAndHealth
+
+### 🛡️ 安全小补丁
+
+- **路径遍历防护补漏** — `_validate_audio_path()` 加 `os.path.normpath()` 预处理，防止 `foo/../../etc/passwd` 类路径绕过检查
+
+### 🔊 音频后处理补全
+
+- **模型原生 batch 路径添加淡入淡出** — 之前逐条生成路径有 `apply_fade`，batch 路径跳过了，行为不一致。现在 batch 路径也有了，首尾不爆音
+- **VoxCPM2 输出添加淡入淡出** — 48kHz 双倍采样点，`save_file=true` 和 `save_file=false` 两条路径都补上了
+
+### 🏗️ 构建 & 配置
+
+- **`.spec` optimize=0 → optimize=2** — 打包优化级别拉满，产物更小
+- **`build.sh` libsndfile 动态路径查找** — 同时支持 Intel（`/usr/local/lib`）和 ARM（`/opt/homebrew/lib`）Homebrew
+- **配置去重** — `build.sh` 不再写一遍 `--hidden-import` / `--collect-all`，全部走 `tts_serve_mlx.spec`，两份不同步的风险消除
+- **`by_size` 清理算法微调** — 之前第一个撑爆上限的文件会连带后面所有旧文件一起杀，现在逐个删直到低于上限，不会多删
+
+### 🧼 其他小修
+
+- **`.gitignore` 清理** — 删掉已不存在的 `Custom_MLX` 和 `whisper_asr_MLX` 残留意指
+- **`server_main.py` 启动日志** — 启动时打印 `models_dir` 配置值，方便排查
+- **`docs/voxcpm2-guide.md` 补充说明** — 加了段注释为什么项目选 4-bit 而非推荐的 8-bit（16GB M1 内存更稳）
+- **Electron 集成指南轮询退避建议** — 大型模型下载 2GB+ 可考虑 1s→2s→4s 指数退避
+
+### 📦 打包加固 & SSL 兼容
+
+- **`certifi` 接管 SSL 验证** — 模型下载改用 `certifi.where()` 获取独立 CA 证书包，打包进 app 内，不依赖用户系统钥匙串
+- **SSL 失败三层兜底** — `certifi` CA → `_create_unverified_context()` 降级，刚出厂的 Mac 也能正常下载模型
+- **`build.sh` 首行 `unset PYTHONPATH`** — 防止 Hermes 3.11 包污染 PyInstaller 打包，pip 和 PyInstaller 都只从项目 venv 取包
+- **`certifi` 强制安装到项目 venv** — 之前蹭 Hermes 3.11 的 certifi，打包后路径不可用，现在项目 venv 独立一份
 
 ### 📥 模型下载改用 HTTP 流式下载
 

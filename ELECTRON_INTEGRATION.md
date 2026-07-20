@@ -26,6 +26,28 @@ Electron 主进程
        └── /output/{filename}        → 静态文件访问 (FastAPI mount)
 ```
 
+---
+
+## 安全说明：Origin/Referer 校验
+
+> ⚠️ **后端已内置 Origin/Referer 校验中间件，Electron 不需要任何额外适配。**
+
+后端对所有 POST/PUT/DELETE 请求检查 `Origin` / `Referer` 头：
+
+| 来源 | 行为 | 原因 |
+|------|------|------|
+| 空（无 Origin 也无 Referer） | ✅ **放行** | curl / Python 脚本 / **Electron 主进程** |
+| `Origin: null` | ✅ **放行** | Electron 渲染进程 `file://` 协议 |
+| `localhost:xxxx` | ✅ **放行** | Swagger UI、Vite 开发服务器 |
+| `127.0.0.1:xxxx` | ✅ **放行** | 同上 |
+| 其他任意来源 | ❌ **403 拒绝** | 恶意网页 `<form>` / `fetch` 绕过 CORS 打后端 |
+
+> **原理**：当用户在 Electron 中浏览恶意网站时，浏览器会自动在请求头中带上 `Origin: https://evil.com`，中间件看到这个来源不是本地，直接拒绝。恶意网站没办法伪造 Origin（浏览器安全策略），所以这个方案对「开着 Electron 访问恶意网页」的场景覆盖得很干净。
+
+前端调用（主进程 `spawn` 出来的 Python 进程、渲染进程 `file://` 的 fetch）都不带非本地 Origin，所以完全不受影响，**零改动**。
+
+---
+
 ## 1. 放置打包产物
 
 将 `dist/tts_serve_mlx/` 复制到 Electron 项目的资源目录：
@@ -62,7 +84,7 @@ async function downloadModel(modelKey: string): Promise<boolean> {
     return startRes.ok;
   }
 
-  // 2. 轮询下载进度
+  // 2. 轮询下载进度（建议前端加指数退避：1s → 2s → 4s，大型模型下载 2GB+ 可减少请求数）
   return new Promise((resolve) => {
     const interval = setInterval(async () => {
       const statusRes = await fetch(
@@ -109,9 +131,9 @@ import * as path from 'path';
 import * as http from 'http';
 
 let pythonServer: ChildProcess | null = null;
+let serverPort: number = 0;  // 从 Python stdout 解析
 
 // ---- 配置 ----
-const SERVER_PORT = 8000;
 const SERVER_HOST = '127.0.0.1';
 const STARTUP_TIMEOUT = 60_000; // 60 秒
 const HEALTH_CHECK_INTERVAL = 500; // 500ms
@@ -150,7 +172,7 @@ async function startTTSServer(): Promise<void> {
         cwd,
         env: {
             ...process.env,
-            TTS_SERVE_PORT: String(SERVER_PORT),
+            // 不传 TTS_SERVE_PORT，让 Python 自动找空闲端口（8000-8050）
             TTS_SERVE_HOST: SERVER_HOST,
             TTS_SERVE_LOG_LEVEL: 'warning',
             ...(modelsDir ? { TTS_SERVE_MODELS_DIR: modelsDir } : {}),
@@ -158,9 +180,15 @@ async function startTTSServer(): Promise<void> {
         stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    // 打印日志
+    // 从 stdout 解析端口号
     pythonServer.stdout?.on('data', (data: Buffer) => {
-        console.log(`[TTS:stdout] ${data.toString().trim()}`);
+        const text = data.toString().trim();
+        console.log(`[TTS:stdout] ${text}`);
+        const match = text.match(/^TTS_SERVER_PORT=(\d+)$/);
+        if (match) {
+            serverPort = parseInt(match[1], 10);
+            console.log(`[TTS] 发现动态端口: ${serverPort}`);
+        }
     });
     pythonServer.stderr?.on('data', (data: Buffer) => {
         console.log(`[TTS:stderr] ${data.toString().trim()}`);
@@ -173,10 +201,25 @@ async function startTTSServer(): Promise<void> {
         console.error(`[TTS] 进程错误:`, err.message);
     });
 
-    // 等待服务就绪
-    await waitForHealth();
+    // 等待端口发现 + 服务就绪
+    await waitForPortAndHealth();
     console.log('[TTS] 服务就绪!');
 }
+
+/** 等待 Python 打印端口号，然后等待健康检查 */
+async function waitForPortAndHealth(): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < STARTUP_TIMEOUT) {
+        if (serverPort > 0) {
+            const ok = await httpGet(`http://${SERVER_HOST}:${serverPort}/health`);
+            if (ok) return;
+        }
+        await new Promise((r) => setTimeout(r, HEALTH_CHECK_INTERVAL));
+    }
+    throw new Error(`TTS 服务启动超时 (${STARTUP_TIMEOUT}ms)`);
+}
+
+> ⚠️ **后续 API 调用**：所有请求地址中的 `:8000` 应替换为 `:${serverPort}`，后端已不固定使用 8000 端口。
 
 // ---- 健康检查轮询 ----
 function httpGet(url: string): Promise<boolean> {
