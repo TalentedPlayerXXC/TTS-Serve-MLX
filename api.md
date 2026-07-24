@@ -103,6 +103,8 @@ POST /model/load
 |------|------|------|------|
 | `model` | string | 是 | 模型名称，可选 `"tts"`（Qwen3 TTS, Speaker 模式）、`"voxcpm2"`（情感克隆/设计） |
 
+> ⚠️ **注意**：加载一个模型会自动卸载另一个模型（Qwen3-TTS 和 VoxCPM2 共占显存，不能同时加载）。
+
 **Response:**
 ```json
 {
@@ -175,7 +177,7 @@ POST /clone
 | `text` | string | 是 | - | 目标文本，1-5000 字符 |
 | `ref_audio` | string | 是 | - | 参考音频文件路径 |
 | `ref_text` | string | 否 | null | 参考音频的原文。不传=Speaker Embedding 模式，传了=ICL 模式 |
-| `stream` | bool | 否 | false | 是否使用流式生成 |
+| `stream` | bool | 否 | false | 使用模型内部流式生成，客户端仍一次性获取完整音频（非 HTTP Streaming/SSE） |
 | `save_file` | bool | 否 | true | 是否保存为文件。`false` 时直接返回 WAV 二进制流 |
 | `filename` | string | 否 | null | 自定义文件名（不含扩展名） |
 
@@ -229,7 +231,7 @@ POST /batch-clone
 | `output_filename` | string | 否 | null | 合并后文件名（不含扩展名） |
 | `return_raw` | bool | 否 | false | `true`=直接返回合并后 WAV 二进制流 |
 
-**Response (200, return_raw=false):**
+**Response (200, return_raw=false, merge=true):**
 ```json
 {
   "success": true,
@@ -239,14 +241,12 @@ POST /batch-clone
     {
       "index": 0,
       "text": "第一段配音内容",
-      "audio_url": "/output/batch_abc123_01.wav",
-      "filename": "batch_abc123_01.wav"
+      "sample_rate": 24000
     },
     {
       "index": 1,
       "text": "第二段配音内容",
-      "audio_url": "/output/batch_abc123_02.wav",
-      "filename": "batch_abc123_02.wav"
+      "sample_rate": 24000
     }
   ],
   "merged": {
@@ -255,7 +255,9 @@ POST /batch-clone
   }
 }
 ```
-> `return_raw=true` 时返回合并后的 `audio/wav` 二进制流。
+
+> merge=false 时 files 中各项目额外包含 `audio_url` 和 `filename` 字段（独立文件）。
+> `return_raw=true` 时（仅 merge=true 有效）返回合并后的 `audio/wav` 二进制流。
 
 ## 4. 对话生成
 
@@ -289,6 +291,7 @@ POST /dialogue
 | `items` | array | 是 | - | 对话列表，每项结构同批量克隆项 |
 | `output_filename` | string | 否 | `"dialogue"` | 输出文件名（不含扩展名） |
 | `return_raw` | bool | 否 | false | `true`=直接返回合并后 WAV 二进制流 |
+| `silence_duration` | float | 否 | `0.3` | 段落间静音间隔（秒） |
 
 **Response (200, return_raw=false):**
 ```json
@@ -321,8 +324,8 @@ POST /vox/clone
   "ref_audio": "./audio/reference.wav",
   "ref_text": "参考音频文本",
   "instruct": "温暖的声音",
-  "inference_timesteps": 5,
-  "cfg_value": 3.0
+  "inference_timesteps": 6,
+  "cfg_value": 4.0
 }
 ```
 
@@ -362,8 +365,8 @@ POST /vox/design
 {
   "text": "欢迎收听今天的新闻播报",
   "instruct": "沉稳的男声，语速适中，带有一点电台播音员的质感",
-  "inference_timesteps": 7,
-  "cfg_value": 3.0
+  "inference_timesteps": 6,
+  "cfg_value": 4.0
 }
 ```
 
@@ -552,7 +555,7 @@ GET /models-info
 POST /model/download
 ```
 
-后端通过 `modelscope download` 或 `huggingface-cli download` 下载模型，异步启动，通过 8.3 查询进度。
+后端通过 HTTP 流式下载模型文件（纯 Python urllib 实现，流式写入磁盘，不依赖任何 CLI 工具），异步启动，通过 8.3 查询进度。
 
 **Request Body:**
 ```json
@@ -593,7 +596,7 @@ GET /model/download/status/{model}
   "model": "qwenTTS_0.6B_MLX",
   "status": "downloading",
   "progress": 45,
-  "message": "Downloading [model.safetensors]: 45%|█████"
+  "message": "model.safetensors 45%"
 }
 ```
 
@@ -614,6 +617,7 @@ GET /model/download/status/{model}
 |--------|------|------|
 | 200 | OK | 请求成功 |
 | 400 | Bad Request | 参数校验失败 |
+| 403 | Forbidden | 来源校验不通过（仅非本机 Origin/Referer） |
 | 404 | Not Found | 请求的文件不存在 |
 | 500 | Internal Server Error | 服务端处理异常 |
 | 503 | Service Unavailable | 模型未加载 |
@@ -631,7 +635,7 @@ GET /model/download/status/{model}
 
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
-| `TTS_SERVE_PORT` | `8000` | 服务器端口 |
+| `TTS_SERVE_PORT` | `8000`（未设时自动扫描 8000-8050） | 服务器端口 |
 | `TTS_SERVE_HOST` | `127.0.0.1` | 绑定地址 |
 | `TTS_SERVE_LOG_LEVEL` | `warning` | 日志级别 |
 | `TTS_SERVE_MODELS_DIR` | `./models` | 模型目录基础路径 |

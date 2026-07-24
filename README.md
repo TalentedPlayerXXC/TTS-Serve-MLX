@@ -78,7 +78,7 @@ python3 server_main.py
 
 | 变量 | 默认值 | 干嘛的 |
 |------|--------|--------|
-| `TTS_SERVE_PORT` | `8000` | 端口号，想换就换 |
+| `TTS_SERVE_PORT` | `8000`（未设时自动扫描 8000-8050） | 端口号 |
 | `TTS_SERVE_HOST` | `127.0.0.1` | 绑哪，别乱 expose |
 | `TTS_SERVE_LOG_LEVEL` | `warning` | 想听它叨叨就改 info |
 | `TTS_SERVE_MODELS_DIR` | `./models` | 模型藏哪了 |
@@ -94,7 +94,7 @@ python3 server_main.py
 | `GET` | `/model/status` | 醒了没？简洁版 |
 | `POST` | `/model/load` | 喊起床：`tts`（Speaker）、`voxcpm2`（情感） |
 | `POST` | `/model/unload` | 让模型回去睡，省内存 |
-| `POST` | `/model/download` | 📥 一键下载模型，后端 `git clone`，魔搭优先 |
+| `POST` | `/model/download` | 📥 一键下载模型，后端 HTTP 流式下载，魔搭优先 |
 | `POST` | `/clone` | 🎭 语音克隆 — Speaker 模式速通，传 ref_text 可切 ICL |
 | `POST` | `/batch-clone` | 📦 批量配音 — 一次塞 N 段，可选合并 |
 | `POST` | `/dialogue` | 💬 对话 — 多角色唠嗑，自动拼接 |

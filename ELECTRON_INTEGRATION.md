@@ -6,7 +6,7 @@
 Electron 主进程
   │   spawn / child_process
   │
-  └─→ Python Server (子进程, localhost:8000)
+  └─→ Python Server (子进程, localhost:{dynamic} 动态端口)
        │
        ├── GET  /health              → 健康检查
        ├── GET  /model-info          → 模型状态详情
@@ -109,7 +109,7 @@ async function startApp() {
   await startTTSServer();
 
   const dl1 = downloadModel('qwenTTS_0.6B_MLX');
-  // 显示 "Qwen3-TTS: 45% - Downloading [model.safetensors]: 45%|█████"
+  // 显示 "qwenTTS_0.6B_MLX: 45% - model.safetensors 45%"
 
   const dl2 = downloadModel('voxCPM2_4bit_MLX');
 
@@ -299,12 +299,13 @@ async function ttsBatchClone(
         stream?: boolean;
     }>,
     merge: boolean = true,
+    outputFilename?: string,
     returnRaw: boolean = false,
 ) {
     const res = await fetch(`http://${SERVER_HOST}:${SERVER_PORT}/batch-clone`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items, merge, return_raw: returnRaw }),
+        body: JSON.stringify({ items, merge, output_filename: outputFilename ?? null, return_raw: returnRaw }),
     });
     if (returnRaw) return res.arrayBuffer();
     return res.json();
@@ -327,8 +328,8 @@ async function voxClone(text: string, refAudio: string, options?: {
             ref_audio: refAudio,
             ref_text: options?.refText ?? null,
             instruct: options?.instruct ?? null,
-            inference_timesteps: options?.inferenceTimesteps ?? 5,
-            cfg_value: options?.cfgValue ?? 3.0,
+            inference_timesteps: options?.inferenceTimesteps ?? 6,
+            cfg_value: options?.cfgValue ?? 4.0,
             save_file: saveFile,
         }),
     });
@@ -349,12 +350,41 @@ async function voxDesign(text: string, instruct: string, options?: {
         body: JSON.stringify({
             text,
             instruct,
-            inference_timesteps: options?.inferenceTimesteps ?? 7,
-            cfg_value: options?.cfgValue ?? 3.0,
+            inference_timesteps: options?.inferenceTimesteps ?? 6,
+            cfg_value: options?.cfgValue ?? 4.0,
             save_file: saveFile,
         }),
     });
     if (!saveFile) return res.arrayBuffer();
+    return res.json();
+}
+
+/** 多角色对话生成 */
+async function ttsDialogue(
+    items: Array<{
+        text: string;
+        ref_audio: string;
+        ref_text?: string;
+        stream?: boolean;
+    }>,
+    options?: {
+        outputFilename?: string;
+        returnRaw?: boolean;
+        silenceDuration?: number;
+    },
+) {
+    const returnRaw = options?.returnRaw ?? false;
+    const res = await fetch(`http://${SERVER_HOST}:${SERVER_PORT}/dialogue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            items,
+            output_filename: options?.outputFilename ?? 'dialogue',
+            return_raw: returnRaw,
+            silence_duration: options?.silenceDuration ?? 0.3,
+        }),
+    });
+    if (returnRaw) return res.arrayBuffer();
     return res.json();
 }
 
@@ -389,6 +419,21 @@ async function unloadModel(model: 'tts' | 'voxcpm2'): Promise<boolean> {
 /** 获取生成的文件 URL */
 function getAudioUrl(filename: string): string {
     return `http://${SERVER_HOST}:${SERVER_PORT}/output/${filename}`;
+}
+
+/** 列出生成的文件（支持分页） */
+async function listGeneratedFiles(limit: number = 100, offset: number = 0) {
+    const res = await fetch(
+        `http://${SERVER_HOST}:${SERVER_PORT}/files?limit=${limit}&offset=${offset}`
+    );
+    return res.json();
+    // { files: [{filename, size, url}], total, limit, offset }
+}
+
+/** 下载指定的生成文件 */
+async function downloadGeneratedFile(filename: string): Promise<ArrayBuffer> {
+    const res = await fetch(`http://${SERVER_HOST}:${SERVER_PORT}/files/${filename}`);
+    return res.arrayBuffer();
 }
 
 // ---- Electron 生命周期集成 ----
@@ -435,7 +480,7 @@ app.on('window-all-closed', () => {
 });
 ```
 
-## 3. 在 `electron-builder` 中配置
+## 4. 在 `electron-builder` 中配置
 
 在 `electron-builder.yml` 中配置额外资源打包：
 
@@ -448,7 +493,7 @@ extraResources:
       - "**/*"
 ```
 
-## 4. 开发模式运行
+## 5. 开发模式运行
 
 在开发时，不需要每次启动都打包，直接让 Electron 使用系统 Python：
 
@@ -463,7 +508,7 @@ python3 server_main.py
 npm run dev
 ```
 
-## 5. 常见问题
+## 6. 常见问题
 
 ### 端口被占用
 修改 `TTS_SERVE_PORT` 环境变量：
